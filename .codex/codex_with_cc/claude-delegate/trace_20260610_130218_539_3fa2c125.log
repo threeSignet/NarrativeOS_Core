@@ -1,0 +1,16 @@
+[attempt] 1 session=fbb0bb9e-4c7a-4343-808a-2430541af107 resume=True
+[system] init
+[assistant] message=msg_2026061013022198b607e9ac7f4823
+[user]
+[assistant] message=msg_2026061013022198b607e9ac7f4823
+[user]
+[assistant] message=msg_2026061013022198b607e9ac7f4823
+[user]
+[assistant] message=msg_20260610130233e0f737b80e314d0d
+[system] task_started
+[system] task_notification completed
+[user]
+[assistant] message=msg_2026061013025191f61481f8ae4085
+[user]
+[assistant] message=msg_20260610130307098e74aff9fe439d
+[result] success

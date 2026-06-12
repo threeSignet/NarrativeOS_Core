@@ -1,0 +1,394 @@
+{
+  "artifactSchema": 3,
+  "invocationContract": "codex_with_cc_workflow",
+  "workflowId": "phase15a-query-hardening",
+  "createdAt": "2026-06-10T12:16:36.672001+08:00",
+  "updatedAt": "2026-06-10T13:07:08.258334+08:00",
+  "tasks": {
+    "query-hardening-impl": {
+      "taskId": "query-hardening-impl",
+      "role": "implementer",
+      "scope": [
+        "src/core/query-engine.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md"
+      ],
+      "verification": [
+        "npm run typecheck",
+        "npm test -- --run tests/integration/query-engine.test.ts"
+      ],
+      "dependsOn": [],
+      "runs": [
+        "20260610_120848_828_2b8ab411"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "implementer",
+      "reviewDecision": "accepted",
+      "reviews": {
+        "quality": {
+          "runId": "20260610_130218_539_3fa2c125",
+          "taskId": "query-hardening-final-quality-review",
+          "status": "completed",
+          "reportStatus": "DONE",
+          "reportFinalResult": "DONE",
+          "reportRole": "reviewer",
+          "reviewDecision": "accepted"
+        },
+        "spec": {
+          "runId": "20260610_123918_849_ae15f67a",
+          "taskId": "query-final-spec-review",
+          "status": "completed",
+          "reportStatus": "DONE",
+          "reportFinalResult": "DONE",
+          "reportRole": "reviewer",
+          "reviewDecision": "accepted"
+        }
+      }
+    },
+    "query-hardening-quality-review": {
+      "taskId": "query-hardening-quality-review",
+      "role": "reviewer",
+      "scope": [
+        "src/core/query-engine.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md",
+        ".codex/codex_with_cc/claude-delegate"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_122025_303_197b8297"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE_WITH_CONCERNS",
+      "lastReportFinalResult": "DONE_WITH_CONCERNS",
+      "lastReportRole": "reviewer",
+      "reviewDecision": "needs-review",
+      "reviewForTaskId": "query-hardening-impl",
+      "reviewKind": "quality"
+    },
+    "query-coverage-polish-impl": {
+      "taskId": "query-coverage-polish-impl",
+      "role": "implementer",
+      "scope": [
+        "src/types.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md"
+      ],
+      "verification": [
+        "npm run typecheck",
+        "npm test -- --run tests/integration/query-engine.test.ts"
+      ],
+      "dependsOn": [],
+      "runs": [
+        "20260610_122943_203_9854177c"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "implementer",
+      "reviewDecision": "accepted",
+      "reviews": {
+        "quality": {
+          "runId": "20260610_123616_915_ef1aa0ba",
+          "taskId": "query-final-quality-review",
+          "status": "completed",
+          "reportStatus": "DONE",
+          "reportFinalResult": "DONE",
+          "reportRole": "reviewer",
+          "reviewDecision": "accepted"
+        },
+        "spec": {
+          "runId": "20260610_130355_519_0a4157e8",
+          "taskId": "query-coverage-polish-final-spec-review",
+          "status": "completed",
+          "reportStatus": "DONE",
+          "reportFinalResult": "DONE",
+          "reportRole": "reviewer",
+          "reviewDecision": "accepted"
+        }
+      }
+    },
+    "query-final-quality-review": {
+      "taskId": "query-final-quality-review",
+      "role": "reviewer",
+      "scope": [
+        "src/core/query-engine.ts",
+        "src/types.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md",
+        ".codex/codex_with_cc/claude-delegate"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_123616_915_ef1aa0ba"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "reviewer",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-coverage-polish-impl",
+      "reviewKind": "quality"
+    },
+    "query-final-spec-review": {
+      "taskId": "query-final-spec-review",
+      "role": "reviewer",
+      "scope": [
+        "src/core/query-engine.ts",
+        "src/types.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md",
+        ".codex/codex_with_cc/claude-delegate"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_123918_849_ae15f67a"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "reviewer",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-hardening-impl",
+      "reviewKind": "spec"
+    },
+    "query-hardening-final-quality-review": {
+      "taskId": "query-hardening-final-quality-review",
+      "role": "reviewer",
+      "scope": [
+        "src/core/query-engine.ts",
+        "src/types.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md",
+        ".codex/codex_with_cc/claude-delegate"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_130218_539_3fa2c125"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "reviewer",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-hardening-impl",
+      "reviewKind": "quality"
+    },
+    "query-coverage-polish-final-spec-review": {
+      "taskId": "query-coverage-polish-final-spec-review",
+      "role": "reviewer",
+      "scope": [
+        "src/core/query-engine.ts",
+        "src/types.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md",
+        ".codex/codex_with_cc/claude-delegate"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_130355_519_0a4157e8"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "reviewer",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-coverage-polish-impl",
+      "reviewKind": "spec"
+    },
+    "query-final-verifier": {
+      "taskId": "query-final-verifier",
+      "role": "final-verifier",
+      "scope": [
+        "src/core/query-engine.ts",
+        "src/types.ts",
+        "tests/integration/query-engine.test.ts",
+        "docs/core-development-log.md",
+        ".codex/codex_with_cc/claude-delegate"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_130610_798_8756dc88"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "final-verifier",
+      "reviewDecision": "accepted"
+    }
+  },
+  "runs": {
+    "20260610_120848_828_2b8ab411": {
+      "runId": "20260610_120848_828_2b8ab411",
+      "taskId": "query-hardening-impl",
+      "role": "implementer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "implementer",
+      "reportSummary": "Fixed the Knowledge latest-state query semantics in Phase 1.5A Query Layer. The core bug was that `minConfidence` was passed to `knowledgeStore.query()` before the \"pick latest per (entityId, factId)\" logic, causing newer sealed records (confidence=0) to be pre-filtered out at the SQL level and older correct-confidence records to be incorrectly returned as the current state. The fix moves all visibility filtering (includeSealed + minConfidence) to a single post-selection filter in `findKnowledge`, applied after the latest record has been determined. Added 3 new integration tests covering: (1) minConfidence with newer seal, (2) seal-then-restore rowid arbitration, (3) includeHistory + includeSealed.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": null,
+      "reviewKind": null,
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_120848_828_2b8ab411.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_120848_828_2b8ab411.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_120848_828_2b8ab411.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_120848_828_2b8ab411.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_120848_828_2b8ab411.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_120848_828_2b8ab411.log"
+    },
+    "20260610_122025_303_197b8297": {
+      "runId": "20260610_122025_303_197b8297",
+      "taskId": "query-hardening-quality-review",
+      "role": "reviewer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE_WITH_CONCERNS",
+      "reportFinalResult": "DONE_WITH_CONCERNS",
+      "reportRole": "reviewer",
+      "reportSummary": "Quality review of `query-hardening-impl`. The implementation correctly fixes the `minConfidence` pre-filtering bug in `findKnowledge` by moving all visibility filtering to a single post-selection stage. The change is minimal (3 methods touched, no type/interface changes), the Query Layer remains read-only, and Phase 1.5A boundaries are respected. All 3 new tests cover the actual bug trigger paths, not just happy paths. Two non-blocking concerns identified.",
+      "reviewDecision": "needs-review",
+      "reviewForTaskId": "query-hardening-impl",
+      "reviewKind": "quality",
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_122025_303_197b8297.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_122025_303_197b8297.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_122025_303_197b8297.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_122025_303_197b8297.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_122025_303_197b8297.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_122025_303_197b8297.log"
+    },
+    "20260610_122943_203_9854177c": {
+      "runId": "20260610_122943_203_9854177c",
+      "taskId": "query-coverage-polish-impl",
+      "role": "implementer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "implementer",
+      "reportSummary": "Added `entityId + factId + minConfidence` combination test to cover the `getLatestKnowledge` cross-filtering path (query by entityId at store level, filter by factId in `pickLatestByEntityAndFact`), confirming that a newer seal record prevents the older high-confidence record from being returned. Clarified `includeHistory` semantics in `NarrativeKnowledgeFilter` JSDoc: history mode returns all matching records without (entityId, factId) dedup; sealed record visibility is still controlled by `includeSealed`. Updated development log.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": null,
+      "reviewKind": null,
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_122943_203_9854177c.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_122943_203_9854177c.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_122943_203_9854177c.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_122943_203_9854177c.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_122943_203_9854177c.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_122943_203_9854177c.log"
+    },
+    "20260610_123616_915_ef1aa0ba": {
+      "runId": "20260610_123616_915_ef1aa0ba",
+      "taskId": "query-final-quality-review",
+      "role": "reviewer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "reviewer",
+      "reportSummary": "Final quality review of the Phase 1.5A Query Layer hardening across both implementation rounds (query-hardening-impl + query-coverage-polish-impl). The implementation is minimal, correct, and well-tested. All acceptance criteria are met. No blocking issues found.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-coverage-polish-impl",
+      "reviewKind": "quality",
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_123616_915_ef1aa0ba.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_123616_915_ef1aa0ba.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_123616_915_ef1aa0ba.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_123616_915_ef1aa0ba.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_123616_915_ef1aa0ba.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_123616_915_ef1aa0ba.log"
+    },
+    "20260610_123918_849_ae15f67a": {
+      "runId": "20260610_123918_849_ae15f67a",
+      "taskId": "query-final-spec-review",
+      "role": "reviewer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "reviewer",
+      "reportSummary": "Spec compliance review of Phase 1.5A Query Layer hardening (query-hardening-impl + query-coverage-polish-impl). All acceptance criteria are satisfied. The implementation matches the required specification: findKnowledge executes in the correct 3-step order (store candidates without minConfidence -> pick latest per entityId/factId -> apply visibility filters). No spec violations found.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-hardening-impl",
+      "reviewKind": "spec",
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_123918_849_ae15f67a.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_123918_849_ae15f67a.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_123918_849_ae15f67a.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_123918_849_ae15f67a.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_123918_849_ae15f67a.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_123918_849_ae15f67a.log"
+    },
+    "20260610_130218_539_3fa2c125": {
+      "runId": "20260610_130218_539_3fa2c125",
+      "taskId": "query-hardening-final-quality-review",
+      "role": "reviewer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "reviewer",
+      "reportSummary": "Final quality review of Phase 1.5A Query Layer hardening across both rounds (query-hardening-impl + query-coverage-polish-impl). The implementation is minimal, correct, well-tested, and maintainable. No blocking issues. Accepted.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-hardening-impl",
+      "reviewKind": "quality",
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_130218_539_3fa2c125.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_130218_539_3fa2c125.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_130218_539_3fa2c125.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_130218_539_3fa2c125.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_130218_539_3fa2c125.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_130218_539_3fa2c125.log"
+    },
+    "20260610_130355_519_0a4157e8": {
+      "runId": "20260610_130355_519_0a4157e8",
+      "taskId": "query-coverage-polish-final-spec-review",
+      "role": "reviewer",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "reviewer",
+      "reportSummary": "Spec compliance review of query-coverage-polish-impl (and its dependency query-hardening-impl). All acceptance criteria satisfied. No spec violations.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": "query-coverage-polish-impl",
+      "reviewKind": "spec",
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_130355_519_0a4157e8.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_130355_519_0a4157e8.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_130355_519_0a4157e8.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_130355_519_0a4157e8.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_130355_519_0a4157e8.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_130355_519_0a4157e8.log"
+    },
+    "20260610_130610_798_8756dc88": {
+      "runId": "20260610_130610_798_8756dc88",
+      "taskId": "query-final-verifier",
+      "role": "final-verifier",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "final-verifier",
+      "reportSummary": "Workflow `phase15a-query-hardening` final verification complete. Both implementer tasks completed with accepted spec and quality reviews. All verification evidence present and independently confirmed. Phase 1.5A Query Layer hardening is accepted.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": null,
+      "reviewKind": null,
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_130610_798_8756dc88.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_130610_798_8756dc88.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_130610_798_8756dc88.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_130610_798_8756dc88.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_130610_798_8756dc88.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_130610_798_8756dc88.log"
+    }
+  },
+  "finalAcceptance": {
+    "status": "accepted",
+    "pendingTasks": []
+  }
+}

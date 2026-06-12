@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "sessionKey": "install-check",
+  "createdAt": "2026-06-10T12:01:49.924035+08:00",
+  "updatedAt": "2026-06-10T12:01:49.962757+08:00",
+  "primary": {
+    "sessionId": "21f52d4d-f4d7-4f65-b422-081977dd8200",
+    "status": "available",
+    "leaseRunId": null,
+    "leasePid": null,
+    "leasedAt": null,
+    "lastUsedAt": "2026-06-10T12:01:49.962757+08:00",
+    "lastRunId": "20260610_120149_907_c19db7f0",
+    "lastResetAt": null,
+    "lastResetReason": null,
+    "lastResetFromSessionId": null,
+    "lastResetFromRunId": null
+  },
+  "parallelPool": []
+}

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "sessionKey": "phase15a-query-hardening",
+  "createdAt": "2026-06-10T12:08:48.846366+08:00",
+  "updatedAt": "2026-06-10T13:07:08.266066+08:00",
+  "primary": {
+    "sessionId": "fbb0bb9e-4c7a-4343-808a-2430541af107",
+    "status": "available",
+    "leaseRunId": null,
+    "leasePid": null,
+    "leasedAt": null,
+    "lastUsedAt": "2026-06-10T13:07:08.265066+08:00",
+    "lastRunId": "20260610_130610_798_8756dc88",
+    "lastResetAt": null,
+    "lastResetReason": null,
+    "lastResetFromSessionId": null,
+    "lastResetFromRunId": null
+  },
+  "parallelPool": []
+}

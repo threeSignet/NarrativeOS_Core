@@ -1,0 +1,52 @@
+{
+  "artifactSchema": 3,
+  "invocationContract": "codex_with_cc_workflow",
+  "workflowId": "install-check",
+  "createdAt": "2026-06-10T12:01:49.946303+08:00",
+  "updatedAt": "2026-06-10T12:01:49.952833+08:00",
+  "tasks": {
+    "install-check-dry-run": {
+      "taskId": "install-check-dry-run",
+      "role": "researcher",
+      "scope": [
+        "AGENTS.md"
+      ],
+      "verification": [],
+      "dependsOn": [],
+      "runs": [
+        "20260610_120149_907_c19db7f0"
+      ],
+      "status": "completed",
+      "lastReportStatus": "DONE",
+      "lastReportFinalResult": "DONE",
+      "lastReportRole": "researcher",
+      "reviewDecision": "accepted"
+    }
+  },
+  "runs": {
+    "20260610_120149_907_c19db7f0": {
+      "runId": "20260610_120149_907_c19db7f0",
+      "taskId": "install-check-dry-run",
+      "role": "researcher",
+      "runnerType": "claude_code",
+      "status": "completed",
+      "reportStatus": "DONE",
+      "reportFinalResult": "DONE",
+      "reportRole": "researcher",
+      "reportSummary": "Delegate dry run completed without executing Claude Code.",
+      "reviewDecision": "accepted",
+      "reviewForTaskId": null,
+      "reviewKind": null,
+      "configPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\config_20260610_120149_907_c19db7f0.json",
+      "statusPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\status_20260610_120149_907_c19db7f0.json",
+      "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_120149_907_c19db7f0.md",
+      "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_120149_907_c19db7f0.md",
+      "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_120149_907_c19db7f0.jsonl",
+      "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_120149_907_c19db7f0.log"
+    }
+  },
+  "finalAcceptance": {
+    "status": "accepted",
+    "reason": "no implementer tasks require review"
+  }
+}

@@ -1,0 +1,242 @@
+{
+  "timestamp": "2026-06-09T14:33:11.603Z",
+  "embeddingModel": "BAAI/bge-m3",
+  "embeddingDimension": 1024,
+  "totalFacts": 1662,
+  "baseFacts": 1533,
+  "hardNegatives": 129,
+  "queryCount": 20,
+  "embedTimeMs": 16981,
+  "overallRecallAtK": {
+    "recall5": 0.7999999999999999,
+    "recall10": 0.8583333333333334,
+    "recall20": 0.9083333333333334,
+    "recall50": 0.9583333333333334
+  },
+  "byDifficulty": [
+    {
+      "difficulty": "easy",
+      "queryCount": 5,
+      "avgRecall5": 1,
+      "avgRecall10": 1,
+      "avgRecall20": 1,
+      "avgRecall50": 1,
+      "passed": true
+    },
+    {
+      "difficulty": "medium",
+      "queryCount": 5,
+      "avgRecall5": 0.8,
+      "avgRecall10": 0.8,
+      "avgRecall20": 1,
+      "avgRecall50": 1,
+      "passed": true
+    },
+    {
+      "difficulty": "hard",
+      "queryCount": 6,
+      "avgRecall5": 0.888888888888889,
+      "avgRecall10": 1,
+      "avgRecall20": 1,
+      "avgRecall50": 1,
+      "passed": true
+    },
+    {
+      "difficulty": "extreme",
+      "queryCount": 4,
+      "avgRecall5": 0.41666666666666663,
+      "avgRecall10": 0.5416666666666666,
+      "avgRecall20": 0.5416666666666666,
+      "avgRecall50": 0.7916666666666666,
+      "passed": false
+    }
+  ],
+  "queryResults": [
+    {
+      "id": "q_easy_01",
+      "text": "萧玄的修炼境界是什么",
+      "difficulty": "easy",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_easy_02",
+      "text": "宋天的修炼境界是什么",
+      "difficulty": "easy",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_easy_03",
+      "text": "韩青的修炼境界是什么",
+      "difficulty": "easy",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_easy_04",
+      "text": "唐云的序列是多少",
+      "difficulty": "easy",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_easy_05",
+      "text": "萧无忌属于哪个阵营",
+      "difficulty": "easy",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_medium_01",
+      "text": "叶明的敌人是谁",
+      "difficulty": "medium",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_medium_02",
+      "text": "赵风的敌人是谁",
+      "difficulty": "medium",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_medium_03",
+      "text": "赵风有什么武器",
+      "difficulty": "medium",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_medium_04",
+      "text": "黄尘有什么武器",
+      "difficulty": "medium",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_medium_05",
+      "text": "唐道持有什么封印物",
+      "difficulty": "medium",
+      "recall5": 0,
+      "recall10": 0,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_hard_01",
+      "text": "郑婉发现了刘炎的什么秘密",
+      "difficulty": "hard",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_hard_02",
+      "text": "马长青发现了邓雷的什么秘密",
+      "difficulty": "hard",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_hard_03",
+      "text": "陈一发现了苏寒的什么秘密",
+      "difficulty": "hard",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_hard_04",
+      "text": "太虚观有哪些成员",
+      "difficulty": "hard",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 3,
+      "totalRelevant": 3
+    },
+    {
+      "id": "q_hard_05",
+      "text": "天魔殿有哪些成员",
+      "difficulty": "hard",
+      "recall5": 0.6666666666666666,
+      "recall10": 1,
+      "hitsRetrieved": 3,
+      "totalRelevant": 3
+    },
+    {
+      "id": "q_hard_06",
+      "text": "青云宗有哪些成员",
+      "difficulty": "hard",
+      "recall5": 0.6666666666666666,
+      "recall10": 1,
+      "hitsRetrieved": 3,
+      "totalRelevant": 3
+    },
+    {
+      "id": "q_extreme_01",
+      "text": "萧玄的师父的修为如何",
+      "difficulty": "extreme",
+      "recall5": 0,
+      "recall10": 0.5,
+      "hitsRetrieved": 1,
+      "totalRelevant": 2
+    },
+    {
+      "id": "q_extreme_02",
+      "text": "邓无极的师父的经脉如何",
+      "difficulty": "extreme",
+      "recall5": 0,
+      "recall10": 0,
+      "hitsRetrieved": 2,
+      "totalRelevant": 2
+    },
+    {
+      "id": "q_extreme_03",
+      "text": "吴冥的武器的品级是什么",
+      "difficulty": "extreme",
+      "recall5": 1,
+      "recall10": 1,
+      "hitsRetrieved": 1,
+      "totalRelevant": 1
+    },
+    {
+      "id": "q_extreme_04",
+      "text": "谁在昆仑墟",
+      "difficulty": "extreme",
+      "recall5": 0.6666666666666666,
+      "recall10": 0.6666666666666666,
+      "hitsRetrieved": 2,
+      "totalRelevant": 3
+    }
+  ],
+  "hardNegativeAnalysis": {
+    "totalNegatives": 129,
+    "falseHits": 5,
+    "falseHitRate": 0.025
+  },
+  "decision": "✅ 继续当前六段检索路线 (Recall ≥ 60%)"
+}

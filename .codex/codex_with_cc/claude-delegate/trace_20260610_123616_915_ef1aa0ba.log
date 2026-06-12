@@ -1,0 +1,35 @@
+[attempt] 1 session=fbb0bb9e-4c7a-4343-808a-2430541af107 resume=True
+[system] init
+[assistant] message=msg_202606101236192e373b5242c24951
+[assistant] message=msg_202606101236192e373b5242c24951
+[assistant] message=msg_202606101236192e373b5242c24951
+[user]
+[user]
+[user]
+[assistant] message=msg_2026061012362578c90d0323e64505
+[assistant] message=msg_2026061012362578c90d0323e64505
+[user]
+[assistant] message=msg_2026061012362578c90d0323e64505
+[user]
+[assistant] message=msg_2026061012362578c90d0323e64505
+[user]
+[assistant] message=msg_20260610123630f4aa3c6818cc49a8
+[assistant] message=msg_20260610123630f4aa3c6818cc49a8
+[assistant] message=msg_20260610123630f4aa3c6818cc49a8
+[user]
+[user]
+[assistant] message=msg_20260610123643624e781e13aa45ed
+[assistant] message=msg_20260610123643624e781e13aa45ed
+[user]
+[assistant] message=msg_20260610123650b26511a408a740ac
+[assistant] message=msg_20260610123650b26511a408a740ac
+[user]
+[assistant] message=msg_2026061012371021d039b289844265
+[result] success
+[retry] unstructured success; asking the same Claude session to emit the required report headings
+[attempt] 2 session=fbb0bb9e-4c7a-4343-808a-2430541af107 resume=True
+[system] init
+[assistant] message=msg_20260610123721df7210b2fed34b6a
+[user]
+[assistant] message=msg_202606101237368fedac6d06df4189
+[result] success

@@ -1,0 +1,44 @@
+{
+  "name": "narrative-os-core",
+  "version": "0.1.0",
+  "description": "面向长篇叙事写作的世界状态一致性引擎。追踪小说中的设定、角色状态、伏笔、知识可见性。",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --noEmit false",
+    "dev": "tsx --watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "live": "tsx tests/live-session.ts"
+  },
+  "keywords": [
+    "narrative",
+    "writing",
+    "world-state",
+    "consistency",
+    "novel"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "vectordb": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.9.2",
+    "dotenv": "^17.4.2",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

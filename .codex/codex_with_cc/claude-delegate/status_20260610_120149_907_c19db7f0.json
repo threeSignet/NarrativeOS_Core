@@ -1,0 +1,40 @@
+{
+  "artifactSchema": 3,
+  "invocationContract": "codex_with_cc_workflow",
+  "childThreadMarkerName": "CODEX_CLAUDE_CHILD_THREAD",
+  "childThreadMarkerValidated": true,
+  "runId": "20260610_120149_907_c19db7f0",
+  "workflowId": "install-check",
+  "taskId": "install-check-dry-run",
+  "role": "researcher",
+  "runnerType": "claude_code",
+  "status": "completed",
+  "pid": 40440,
+  "artifactRoot": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate",
+  "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_120149_907_c19db7f0.md",
+  "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_120149_907_c19db7f0.md",
+  "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_120149_907_c19db7f0.jsonl",
+  "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_120149_907_c19db7f0.log",
+  "workflowPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\workflow_install-check.json",
+  "linesWritten": 0,
+  "outputBytes": 598,
+  "exitCode": 0,
+  "attemptCount": 1,
+  "retryCount": 0,
+  "maxRetryCount": 5,
+  "attempts": [
+    {
+      "attempt": 1,
+      "sessionId": "21f52d4d-f4d7-4f65-b422-081977dd8200",
+      "resume": false,
+      "retryReason": null,
+      "exitCode": 0,
+      "sawAssistantText": false,
+      "sawResultSuccess": true,
+      "capturedFinalResult": true,
+      "dryRun": true,
+      "runnerType": "claude_code"
+    }
+  ],
+  "updatedAt": "2026-06-10T12:01:49.944106+08:00"
+}

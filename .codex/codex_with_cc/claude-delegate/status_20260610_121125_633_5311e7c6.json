@@ -1,0 +1,41 @@
+{
+  "artifactSchema": 3,
+  "invocationContract": "codex_with_cc_workflow",
+  "childThreadMarkerName": "CODEX_CLAUDE_CHILD_THREAD",
+  "childThreadMarkerValidated": true,
+  "runId": "20260610_121125_633_5311e7c6",
+  "workflowId": "phase15a-query-hardening",
+  "taskId": "query-hardening-impl",
+  "role": "implementer",
+  "runnerType": "claude_code",
+  "status": "failed",
+  "pid": 39756,
+  "artifactRoot": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate",
+  "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_121125_633_5311e7c6.md",
+  "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_121125_633_5311e7c6.md",
+  "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_121125_633_5311e7c6.jsonl",
+  "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_121125_633_5311e7c6.log",
+  "workflowPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\workflow_phase15a-query-hardening.json",
+  "linesWritten": 0,
+  "outputBytes": 818,
+  "exitCode": 1,
+  "attemptCount": 1,
+  "retryCount": 0,
+  "maxRetryCount": 5,
+  "attempts": [
+    {
+      "attempt": 1,
+      "sessionId": "",
+      "resume": false,
+      "retryReason": null,
+      "exitCode": 1,
+      "sawAssistantText": false,
+      "sawResultSuccess": false,
+      "capturedFinalResult": true,
+      "runnerType": "claude_code"
+    }
+  ],
+  "updatedAt": "2026-06-10T12:13:25.909523+08:00",
+  "failureDisposition": "NEED_HUMAN_INTERVENTION",
+  "failureSummary": "STARTUP_FAILURE: Another delegate_to_claude run is still active. Use -AllowParallel to bypass, or wait. Lock: C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\delegate.lock. Holder: "
+}

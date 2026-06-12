@@ -1,0 +1,1 @@
+[startup-failure] Another delegate_to_claude run is still active. Use -AllowParallel to bypass, or wait. Lock: C:\Users\10652\Documents\person\NarrativeOS_Core\.codex\codex_with_cc\claude-delegate\delegate.lock. Holder: 

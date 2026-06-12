@@ -1,0 +1,43 @@
+{
+  "artifactSchema": 3,
+  "invocationContract": "codex_with_cc_workflow",
+  "childThreadMarkerName": "CODEX_CLAUDE_CHILD_THREAD",
+  "childThreadMarkerValidated": true,
+  "runId": "20260610_130610_798_8756dc88",
+  "workflowId": "phase15a-query-hardening",
+  "taskId": "query-final-verifier",
+  "role": "final-verifier",
+  "runnerType": "claude_code",
+  "status": "completed",
+  "pid": 35412,
+  "artifactRoot": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate",
+  "outputPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\claude_20260610_130610_798_8756dc88.md",
+  "promptPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\prompt_20260610_130610_798_8756dc88.md",
+  "rawStreamPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\stream_20260610_130610_798_8756dc88.jsonl",
+  "tracePath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\trace_20260610_130610_798_8756dc88.log",
+  "workflowPath": "C:\\Users\\10652\\Documents\\person\\NarrativeOS_Core\\.codex\\codex_with_cc\\claude-delegate\\workflow_phase15a-query-hardening.json",
+  "linesWritten": 15,
+  "outputBytes": 2772,
+  "exitCode": 0,
+  "attemptCount": 1,
+  "retryCount": 0,
+  "maxRetryCount": 5,
+  "attempts": [
+    {
+      "attempt": 1,
+      "sessionId": "fbb0bb9e-4c7a-4343-808a-2430541af107",
+      "resume": true,
+      "retryReason": null,
+      "exitCode": 0,
+      "sawAssistantText": true,
+      "sawResultSuccess": true,
+      "capturedFinalResult": true,
+      "outputWasNormalized": false,
+      "sawStaleSessionText": false,
+      "sawStreamJsonVerboseError": false,
+      "runnerType": "claude_code"
+    }
+  ],
+  "updatedAt": "2026-06-10T13:07:08.254440+08:00",
+  "lastOutputAt": "2026-06-10T13:07:07.846591+08:00"
+}

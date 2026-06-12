@@ -1,0 +1,49 @@
+[attempt] 1 session=fbb0bb9e-4c7a-4343-808a-2430541af107 resume=True
+[system] init
+[assistant] message=msg_20260610122028e476a893634e450b
+[assistant] message=msg_20260610122028e476a893634e450b
+[user]
+[user]
+[assistant] message=msg_20260610122028e476a893634e450b
+[user]
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[system] thinking_tokens
+[assistant] message=msg_20260610122034f2ebc465ef4f4421
+[assistant] message=msg_20260610122034f2ebc465ef4f4421
+[assistant] message=msg_20260610122034f2ebc465ef4f4421
+[user]
+[assistant] message=msg_2026061012204091280000670947e7
+[assistant] message=msg_2026061012204091280000670947e7
+[assistant] message=msg_2026061012204091280000670947e7
+[user]
+[user]
+[assistant] message=msg_20260610122050d2a62571761e4570
+[assistant] message=msg_20260610122050d2a62571761e4570
+[user]
+[assistant] message=msg_202606101220574031a0277d2e4c6d
+[assistant] message=msg_202606101220574031a0277d2e4c6d
+[user]
+[assistant] message=msg_202606101221046875975e83c246c6
+[user]
+[assistant] message=msg_202606101221098a7ba62254d14968
+[assistant] message=msg_202606101221098a7ba62254d14968
+[user]
+[assistant] message=msg_20260610122116277dcbdb863b4471
+[assistant] message=msg_20260610122116277dcbdb863b4471
+[user]
+[assistant] message=msg_202606101221228484eb032f414b37
+[assistant] message=msg_202606101221228484eb032f414b37
+[user]
+[assistant] message=msg_20260610122145e1ded51a6199416d
+[result] success
