@@ -14,6 +14,7 @@
   - 旧的 `docs/Agent-Orchestration-Layer.md` 保留为历史草稿 / v0.2 参考，不作为 v0.1 实现主线；其中 L1/L2/L3 熔断、retrieval-aware 策略和多智能体设想后续可按需吸收。
   - v0.1 目标从“基础工具循环”提升为“完整单智能体闭环”：在不做 MCP/UI/多 Agent 的前提下，必须覆盖动态计划、跨 turn 草案演化、确认识别、提交授权、失败反思、trace 审计和 live 授权自动提交。
   - 完整消息原文持久化、自动上下文压缩、跨会话长期记忆纳入 v0.1 必做范围：消息原文用于恢复，压缩摘要用于控制上下文窗口，长期记忆仅记录协作偏好和项目决策，不替代 Core Fact。
+  - 明确实现边界：NarrativeAgent 不写入 `src/core`，应位于 `src/agent`；agent_* 表可以作为同项目 SQLite 数据库中的 sidecar metadata，但 Core 内核、规则引擎和事件提交不得依赖这些表。
 - 变更文件：`docs/NarrativeAgent-Design.md`、`docs/Agent-Orchestration-Layer.md`、`docs/core-development-log.md`。
 - 验证结果：文档变更，无运行时代码；未运行测试。
 - 剩余风险 / 下一依赖：下一步应按该文档实现 `NarrativeAgent` v0.1，并为 trace 表、工具循环、失败反思、pending proposal 和提交授权补充 Mock LLM 测试。

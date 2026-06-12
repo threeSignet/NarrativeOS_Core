@@ -40,6 +40,27 @@ Core Engine / Stores
 
 NarrativeAgent 不直接读写 Core 内部表，不绕过 ToolRouter 修改世界状态。Core 仍然是事实、事件、规则和一致性的唯一裁决者。
 
+实现位置边界：
+
+```text
+src/core        ：Core 内核，不能放 NarrativeAgent
+src/agent       ：NarrativeAgent 本体、运行状态、ReAct 循环、记忆策略
+src/adapters    ：AgentStore / TraceStore 等持久化适配器可以放在这里
+tests/agent     ：NarrativeAgent 的 Mock LLM 和行为测试
+tests/live-*    ：真实 LLM 验证脚本，调用 NarrativeAgent
+```
+
+因此，NarrativeAgent 可以和 Core 位于同一个仓库、同一个 npm 包、同一个项目数据库中，但不能成为 Core 内核的一部分。Core 不依赖 Agent，Agent 依赖 Core 的 ToolRouter / Tool Interface。
+
+数据库边界：
+
+```text
+Core 表      ：facts / events / entities / knowledge / threads / project_state
+Agent 表     ：agent_sessions / agent_turns / agent_messages / agent_traces / agent_memories
+```
+
+Agent 表可以写在同一个项目 SQLite 数据库中，保证随项目移动和备份；但这些表是 Agent sidecar metadata，不是 Core 世界状态。Core 的规则引擎、事件提交、Fact 查询不得依赖 agent_* 表。
+
 ---
 
 ## 3. 核心定义
@@ -904,6 +925,7 @@ v0.1 验收场景：
 
 ```text
 NarrativeAgent 是智能体，不是死流程。
+NarrativeAgent 属于 Core 之上的 Agent 层，不写入 src/core。
 提交主权属于用户，Agent 只有被授权后的代理执行权。
 Core 是唯一状态裁决者。
 失败后先反思，再继续行动。

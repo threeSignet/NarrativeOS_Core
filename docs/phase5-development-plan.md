@@ -4,18 +4,19 @@
 >   - **§5 集成验证**：对应架构文档附录 C 的 Phase 5（Push 模式验证、检索质量评估、完整流程验证）
 >   - **§6 LLM/MCP 补充**：附录 C 未覆盖的新增能力（LLMClient 适配器、Tool Router、MCP Server）
 >
-> **当前状态**：§6A 详细设计中，即将开始实现。
+> **当前状态**：§6A-0（ChatMessage 类型）、§6A-1（DeepSeekLLMClientAdapter）、§6B（Tool Router）均已 ✅ 完成并通过测试。
+> **当前阶段**：§6A-0/6A-1/6B 已完成；正在实现 NarrativeAgent v0.1。
 
 ---
 
 ## 全局验收标准
 
 每个 Step 完成前必须满足：
-- [ ] `npm run typecheck` 零错误
-- [ ] `npm test` 全量通过（无回归）
-- [ ] 新增/修改的测试覆盖新逻辑
-- [ ] 交叉核对架构文档对应章节
-- [ ] `docs/core-development-log.md` 记录变更内容
+- [x] `npm run typecheck` 零错误
+- [x] `npm test` 全量通过（无回归）
+- [x] 新增/修改的测试覆盖新逻辑
+- [x] 交叉核对架构文档对应章节
+- [x] `docs/core-development-log.md` 记录变更内容
 
 ---
 
@@ -96,7 +97,9 @@
 
 ### 6A-0：前置——补齐 `ChatMessage` 类型（Tool 多轮闭环）
 
-**状态**：⬜ 未开始
+**状态**：✅ 已完成
+
+**实现文件**：`src/types/llm.ts`
 
 **问题**：现有 `ChatMessage.role` 只有 `system | user | assistant`，缺少 `tool` 角色和 `tool_call_id` 字段。多轮 Tool Use（LLM 调用 tool → 执行 → 结果反馈给 LLM）需要这些类型。
 
@@ -126,14 +129,16 @@ interface ChatMessage {
 ```
 
 **测试**：
-- [ ] `role='tool'` 消息可正确序列化到 API 请求
-- [ ] `tool_calls` 字段可正确从 API 响应反序列化
+- [x] `role='tool'` 消息可正确序列化到 API 请求（已由 deepseek-client.test.ts 覆盖）
+- [x] `tool_calls` 字段可正确从 API 响应反序列化（已由 deepseek-client.test.ts 覆盖）
 
 ---
 
 ### 6A-1：DeepSeekLLMClientAdapter 实现
 
-**状态**：⬜ 未开始（依赖 6A-0）
+**状态**：✅ 已完成
+
+**实现文件**：`src/adapters/llm/deepseek-client.ts`、`tests/integration/deepseek-client.test.ts`
 
 **任务**：
 
@@ -175,26 +180,26 @@ interface ChatMessage {
 - `tests/integration/deepseek-client.test.ts` — mock fetch 测试
 
 **验收条件**：
-- [ ] 从 `.env` 正确读取 DEEPSEEK_API_KEY、LLM_BASE_URL、LLM_MODEL
-- [ ] `chat()` 发送消息 → 正确接收回复
-- [ ] `chatWithTools()` 发送消息 + tools → 解析 tool_calls
-- [ ] 401 不重试，立即抛异常
-- [ ] 429 重试成功（第 2 次返回 200）
-- [ ] 429 重试耗尽（3 次后抛异常，message 含 `[LLM_API_ERROR]`）
-- [ ] 网络错误抛异常
-- [ ] 配置缺失抛明确错误
-- [ ] `options.model` 可覆盖默认模型
+- [x] 从 `.env` 正确读取 DEEPSEEK_API_KEY、LLM_BASE_URL、LLM_MODEL
+- [x] `chat()` 发送消息 → 正确接收回复
+- [x] `chatWithTools()` 发送消息 + tools → 解析 tool_calls
+- [x] 401 不重试，立即抛异常
+- [x] 429 重试成功（第 2 次返回 200）
+- [x] 429 重试耗尽（3 次后抛异常，message 含 `[LLM_API_ERROR]`）
+- [x] 网络错误抛异常
+- [x] 配置缺失抛明确错误
+- [x] `options.model` 可覆盖默认模型
 
 **测试**（9 个用例，全部 mock fetch）：
-- [ ] `chat()` 基础对话
-- [ ] `chatWithTools()` LLM 返回 tool_calls
-- [ ] `chatWithTools()` LLM 不调用工具
-- [ ] 401 不重试
-- [ ] 429 重试成功
-- [ ] 429 重试耗尽
-- [ ] 网络错误
-- [ ] API key 缺失
-- [ ] model 参数覆盖
+- [x] `chat()` 基础对话
+- [x] `chatWithTools()` LLM 返回 tool_calls
+- [x] `chatWithTools()` LLM 不调用工具
+- [x] 401 不重试
+- [x] 429 重试成功
+- [x] 429 重试耗尽
+- [x] 网络错误
+- [x] API key 缺失
+- [x] model 参数覆盖
 
 ---
 
@@ -203,7 +208,9 @@ interface ChatMessage {
 > 目标：将分散在 ProposalManager / RetconEngine / ToolService / SchemaExtensionManager 中的 10 个 Tool 收敛到一个统一路由层。
 > 这是 6C（MCP）和 §5C（Writing Loop）的共同前置依赖。
 
-**状态**：⬜ 未开始（依赖 6A）
+**状态**：✅ 已完成
+
+**实现文件**：`src/core/tool-router.ts`、`tests/integration/tool-router.test.ts`
 
 **问题**：当前 Tool 实现分散在 4 个类中——
 
@@ -231,9 +238,9 @@ ToolRouter（统一入口）
 ```
 
 **验收条件**：
-- [ ] 10 个 Tool 全部可通过 `ToolRouter.execute()` 调用
-- [ ] `getDefinitions()` 返回完整的 JSON Schema 定义
-- [ ] 调用不存在的 tool 返回 `ToolError(UNKNOWN_TOOL)`
+- [x] 10 个 Tool 全部可通过 `ToolRouter.execute()` 调用
+- [x] `getDefinitions()` 返回完整的 JSON Schema 定义
+- [x] 调用不存在的 tool 返回 `ToolError(UNKNOWN_TOOL)`
 
 **实现文件**：
 - `src/core/tool-router.ts`
