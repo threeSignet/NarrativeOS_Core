@@ -2,7 +2,11 @@
 
 **项目代号**：Narrative-OS-Core
 **最后更新**：2026-06-08
-**状态**：骨架草稿（Scaffold）
+**状态**：历史草稿 / v0.2 参考，不作为当前实现主线
+
+> 当前主线设计已收敛到 `docs/NarrativeAgent-Design.md`。后续 NarrativeAgent v0.1 的实现以该文档为准。
+>
+> 本文档保留为参考材料，主要沉淀早期关于 L1/L2/L3 冲突分级、retrieval-aware 写作策略、多智能体协作和熔断机制的设想。这些内容不进入 v0.1 必做范围，可在 NarrativeAgent 本体稳定后作为 v0.2+ 能力逐步吸收。
 
 ---
 

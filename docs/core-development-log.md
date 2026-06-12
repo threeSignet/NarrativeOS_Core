@@ -1,5 +1,55 @@
 # Core 开发日志
 
+## 2026-06-12 (NarrativeAgent 智能体设计定稿)
+
+- 目标：将“Core 之上的智能体会话层”从临时 live 脚本和 ProjectSession 概念混用中独立出来，形成可实现的 NarrativeAgent 内部设计文档。
+- 触达层级：LLM bridge 之上的 Agent 设计层；本次只写设计文档，不改 Core 运行时代码。
+- 设计决策：
+  - 智能体层统一命名为 `NarrativeAgent`；保留现有 `ProjectSession` 作为 Core 内部上下文对象，避免概念冲突。
+  - NarrativeAgent 采用内部 ReAct 循环：Reason / Act / Observe / Reflect / Respond，但对用户只输出自然语言，不暴露完整思维链。
+  - 提交主权归用户；`commit_event` 是受授权动作，默认 `explicit_user_confirmation`，live 验证可使用 `agent_authorized_for_session`。
+  - 明确区分 `draft`、`proposal`、`committed`：多轮协商先维护 working draft，只有用户确认或授权后才提交为正式世界状态。
+  - 工具失败后必须先反思再继续，反思由确定性诊断和 LLM 语义修复共同完成。
+  - Agent trace 写入项目 SQLite 数据库并跟随项目，只保存行为、观察、反思、决策和结构化细节摘要，不保存完整隐藏推理链。
+  - 旧的 `docs/Agent-Orchestration-Layer.md` 保留为历史草稿 / v0.2 参考，不作为 v0.1 实现主线；其中 L1/L2/L3 熔断、retrieval-aware 策略和多智能体设想后续可按需吸收。
+  - v0.1 目标从“基础工具循环”提升为“完整单智能体闭环”：在不做 MCP/UI/多 Agent 的前提下，必须覆盖动态计划、跨 turn 草案演化、确认识别、提交授权、失败反思、trace 审计和 live 授权自动提交。
+  - 完整消息原文持久化、自动上下文压缩、跨会话长期记忆纳入 v0.1 必做范围：消息原文用于恢复，压缩摘要用于控制上下文窗口，长期记忆仅记录协作偏好和项目决策，不替代 Core Fact。
+- 变更文件：`docs/NarrativeAgent-Design.md`、`docs/Agent-Orchestration-Layer.md`、`docs/core-development-log.md`。
+- 验证结果：文档变更，无运行时代码；未运行测试。
+- 剩余风险 / 下一依赖：下一步应按该文档实现 `NarrativeAgent` v0.1，并为 trace 表、工具循环、失败反思、pending proposal 和提交授权补充 Mock LLM 测试。
+
+## 2026-06-12 (live Agent 行为验收收紧)
+
+- 目标：根据真实 `npm run live` 输出修复会话验证脚本的伪绿风险：重复同一工具错误、未提交 proposal、摘要 `[object Object]` 都不能被静默吞掉。
+- 触达层级：LLM bridge 验证脚本 / Agent 行为雏形，不触碰 Core 写入语义。
+- 设计决策：
+  - 工具失败现在会注入 `correction_hint`，要求 LLM 不要原样重复失败参数；同一工具错误累计 3 次会记为 fatal failure。
+  - live 维护 `pendingProposalIds`，每次 `propose_event` 成功加入待提交集合，`commit_event` 成功后移除；结束时若仍有未提交 proposal，则 live 失败。
+  - `MAX_TOOL_TURNS` 提升到 32，符合“业务上不限制工具轮次”的方向，但仍保留运行时防失控安全阀。
+  - 任何工具错误都会让 live 最终判定失败；只有零工具错误、零未提交 proposal、手工闭环成功时才输出“验证完成 ✅”。
+  - 会话总结使用 `formatLiveFactValue` 渲染对象值，避免 EntityRef 或复杂值显示为 `[object Object]`。
+- 变更文件：`tests/live-session.ts`、`docs/core-development-log.md`。
+- 验证结果：
+  - `npm run typecheck` 通过。
+  - `npm test -- --run tests/integration/deepseek-client.test.ts tests/integration/tool-router.test.ts` 通过（2 个测试文件，31 个测试）。
+  - `npm run live` 联网真实 DeepSeek 会话通过：全程无工具警告，所有 `propose_event` 均提交，最终 21 条当前 Fact，摘要无 `[object Object]`。
+- 剩余风险 / 下一依赖：这些机制仍在 live 验证脚本里；下一步应抽象为正式 `ProjectSession` / Agent 编排层，统一管理消息、工具循环、纠错提示、pending proposal 与验收策略。
+
+## 2026-06-12 (live 会话输出与验收诚实性修复)
+
+- 目标：修复 `npm run live` 在纯文本回复回合吞掉 assistant 内容的问题，避免第 3 轮状态确认直接跳到第 4 轮；同时让 live 验证在手工闭环失败时返回失败，而不是继续打印“验证完成”。
+- 触达层级：LLM bridge 验证脚本输出层，不触碰 Core 状态写入语义。
+- 设计决策：
+  - 对非流式 `chatWithTools` 返回增加 `printAssistantContent`，当 LLM 直接返回文本而非 tool call 时立即打印内容；流式路径仍由 token 回调实时输出。
+  - live 脚本记录 `register_entity` 返回的主角实体 ID，手工闭环优先使用真实 `protagonistId`，避免模型传中文名时生成 `ent_韩立` 后，脚本仍硬编码 `ent_hanli` 造成外键失败。
+  - 记录工具调用警告与手工闭环 fatal failure；若手工 `propose_event/commit_event` 失败，最终输出“验证失败”并设置 `process.exitCode = 1`。
+- 变更文件：`tests/live-session.ts`、`docs/core-development-log.md`。
+- 验证结果：
+  - `npm run typecheck` 通过。
+  - `npm test -- --run tests/integration/deepseek-client.test.ts tests/integration/tool-router.test.ts` 通过（2 个测试文件，31 个测试）。
+  - `npm run live` 联网真实 DeepSeek 会话通过：第 3 轮文本已正常打印，手工 Core 闭环使用真实主角 ID 成功提交，最终输出“验证完成 ✅”。
+- 剩余风险 / 下一依赖：live 脚本仍是验证脚本，不是正式会话编排器；后续 ProjectSession 层应把“纯文本输出不可吞、工具失败不可伪绿、实体 ID 必须从 Core 返回值传递”固化为通用协议。
+
 ## 2026-06-12 (npm 配置警告清理)
 
 - 目标：消除 `npm warn Unknown project config "shamefully-hoist"` 噪音，避免测试输出长期混入非错误警告。
