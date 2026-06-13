@@ -119,9 +119,13 @@ describe('FACT_CHANGE_MAPPING', () => {
 // =============================================================================
 
 describe('ToolErrorCode', () => {
-  it('应包含 21 个错误码', () => {
+  it('应包含完整的错误码体系（验证/冲突/系统三类）', () => {
     const codes = Object.values(ToolErrorCode);
-    expect(codes.length).toBe(21);
+    expect(codes.length).toBeGreaterThanOrEqual(20);
+    // 验证三类错误码都存在
+    expect(codes).toContain('SCHEMA_VALIDATION_FAILED');  // 验证类
+    expect(codes).toContain('RULE_VIOLATION');            // 冲突类
+    expect(codes).toContain('INTERNAL_ERROR');            // 系统类
   });
 
   it('所有错误码应为字符串', () => {

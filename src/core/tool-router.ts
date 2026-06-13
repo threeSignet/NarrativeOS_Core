@@ -53,34 +53,97 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
     // Tool 2: propose_event
     propose_event: {
       name: 'propose_event',
-      description: '提议一个事件（沙盒推演）。必须用 fact_changes 数组描述事实变更；返回 SAFE 后再调用 commit_event。',
+      description: '提议一个事件（沙盒推演）。必须用 fact_changes 数组描述事实变更；返回 SAFE 后再调用 commit_event。支持知识操作、线索关闭、作用域退出和依赖声明。',
       parameters: {
         type: 'object',
         properties: {
-          event_type: { type: 'string', description: '事件类型，如 breakthrough' },
+          event_type: { type: 'string', description: '事件类型，如 breakthrough/character_intro/meeting/battle' },
           event_description: { type: 'string', description: '事件自然语言描述' },
           chapter: { type: 'number', description: '章节号' },
           subject: { type: 'string', description: '事件主体实体ID' },
+          // 核心：事实变更数组
           fact_changes: {
             type: 'array',
-            description: '事实变更数组。assert 需要 subject/predicate/value；update/retract 需要 target_fact_id。',
+            description: '事实变更数组。assert 需要 subject/predicate/value；update/retract 需要 target_fact_id（从 get_context_slice 返回的 fact_index 中获取）。',
             items: {
               type: 'object',
               properties: {
                 change_id: { type: 'string', description: '本次变更的临时 ID，如 c1' },
                 op: { type: 'string', enum: ['assert', 'retract', 'update'], description: '变更操作' },
-                target_fact_id: { type: 'string', description: 'update/retract 的目标 Fact ID' },
+                target_fact_id: { type: 'string', description: 'update/retract 的目标 Fact ID（必须从 fact_index 获取）' },
                 subject: { type: 'string', description: 'assert 的主体实体 ID' },
-                predicate: { type: 'string', description: '谓词，如 realm/status/location' },
-                value: { description: '事实值，可为字符串、数字、布尔值或 entity_ref 对象' },
-                relation_kind: { type: 'string', description: '可选关系语义标注' },
+                predicate: { type: 'string', description: '谓词，如 realm/status/location/weapon/technique/mentor' },
+                value: { description: '事实值，可为字符串、数字、布尔值或 entity_ref 对象 {type:"entity_ref", entityId:"ent_xxx"}' },
+                relation_kind: { type: 'string', description: '可选关系语义标注，如 master/student/ally/enemy' },
                 certainty: { type: 'string', description: '可选确定性标记' },
               },
               required: ['change_id', 'op'],
             },
           },
-          changes: { type: 'string', description: '兼容旧接口：fact_changes 的 JSON 字符串。新调用不要使用。' },
-          context: { type: 'string', description: '作用域，默认global' },
+          // 兼容旧接口
+          changes: { type: 'string', description: '【已废弃】fact_changes 的 JSON 字符串。请使用 fact_changes 数组。' },
+          context: { type: 'string', description: '作用域，默认 "global"。梦境/副本等特殊场景使用。' },
+          // §10.1 作用域退出：从某作用域离开时，Core 自动处理作用域清理
+          exit_from: { type: 'string', description: '退出指定作用域（如 "dream_realm"）。Core 会将被退出作用域中 subject+predicate 匹配的当前 Fact 注入 dependent_fact_ids。' },
+          // §4.5 线索管理：手动关闭伏笔/铺垫
+          thread_resolutions: {
+            type: 'array',
+            description: '需要手动关闭的线索（Thread）ID 列表。用于在事件中收束伏笔。',
+            items: { type: 'string' },
+          },
+          // §5.3 知识细粒度推断：指定"谁通过什么方式知道了什么"
+          knowledge_hints: {
+            type: 'array',
+            description: '知识可见性细粒度推断。指定具体实体对本次变更中某条 fact_change 的知晓情况。',
+            items: {
+              type: 'object',
+              properties: {
+                entityId: { type: 'string', description: '获得新知识的实体 ID' },
+                factIndex: { type: 'number', description: '对应 fact_changes 中的索引（从0开始）。省略则应用到所有变更。' },
+                source: { type: 'string', description: '知识来源：self_action/witnessed/informed/inferred/rumor/revelation' },
+                confidence: { type: 'number', description: '确信度 0.0-1.0，默认 1.0' },
+              },
+              required: ['entityId', 'source'],
+            },
+          },
+          // §5.3 知识粗粒度广播：批量传播知识
+          knowledge_broadcast: {
+            type: 'object',
+            description: '知识可见性粗粒度广播。向一组实体批量传播本次事件的知识。',
+            properties: {
+              visibility: { type: 'string', enum: ['explicit_entities', 'faction_members', 'scene_participants'], description: '广播范围' },
+              target_entity_ids: { type: 'array', items: { type: 'string' }, description: 'visibility=explicit_entities 时指定目标实体列表' },
+              target_faction_id: { type: 'string', description: 'visibility=faction_members 时指定阵营 ID' },
+              confidence: { type: 'number', description: '确信度 0.0-1.0，默认 1.0' },
+              source: { type: 'string', description: '知识来源' },
+            },
+            required: ['visibility', 'source'],
+          },
+          // §5.4 知识显式操作：封印/恢复/衰减/搜魂/植入
+          knowledge_changes: {
+            type: 'array',
+            description: '显式知识操作。seal=封印记忆（确信度压至0）; restore=恢复封印; decay=记忆衰退; soul_read=搜魂（目标实体知识被复制给source_entity）; implant=记忆植入',
+            items: {
+              type: 'object',
+              properties: {
+                op: { type: 'string', enum: ['seal', 'restore', 'decay', 'soul_read', 'implant'], description: '知识操作类型' },
+                target_entity_id: { type: 'string', description: '被操作的目标实体 ID' },
+                fact_id_scope: { type: 'string', enum: ['all', 'by_predicate', 'by_time_range', 'explicit'], description: '操作范围' },
+                fact_ids: { type: 'array', items: { type: 'string' }, description: 'scope=explicit 时指定具体 Fact ID 列表' },
+                predicates: { type: 'array', items: { type: 'string' }, description: 'scope=by_predicate 时指定谓词列表' },
+                time_range: { type: 'object', properties: { from: { type: 'number' }, to: { type: 'number' } }, description: 'scope=by_time_range 时指定时间范围' },
+                source_entity_id: { type: 'string', description: 'soul_read 时：施法者（获得知识的一方）' },
+                implanted_confidence: { type: 'number', description: 'implant 时：植入记忆的确信度' },
+              },
+              required: ['op', 'target_entity_id', 'fact_id_scope'],
+            },
+          },
+          // §10.1 依赖声明：供 Retcon 级联追踪
+          dependent_fact_ids: {
+            type: 'array',
+            description: '本次事件依赖的 Fact ID 列表。用于 Retcon 追溯因果链。从 get_context_slice 的 fact_index 中选取相关 Fact。',
+            items: { type: 'string' },
+          },
         },
         required: ['event_type', 'event_description', 'chapter', 'fact_changes'],
       },
@@ -223,7 +286,7 @@ export class ToolRouter {
   private knowledgeStore: KnowledgeStore;
   private eventStore: EventStore;
   private threadStore: ThreadStore;
-  private entityIdSeq = 0;
+  // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
 
   constructor(deps: {
     proposalManager: ProposalManager;
@@ -479,39 +542,56 @@ export class ToolRouter {
     const chapter = requireNumber(params, 'chapter');
     const tags = Array.isArray(params['tags']) ? params['tags'] as string[] : undefined;
 
-    // 生成实体 ID：ent_{name}[_{seq}]
-    this.entityIdSeq++;
-    const baseId = `ent_${name}`;
-    let entityId = baseId;
-    // 检查是否已存在同名实体，若存在则追加序号
-    const existing = this.factStore.query({ subject: baseId, mode: 'current' });
-    if (existing.length > 0 || this.entityIdSeq > 1) {
-      entityId = `${baseId}_${String(this.entityIdSeq).padStart(2, '0')}`;
-    }
-
-    // 创建系统事件记录这次注册
-    const eventId = `evt_register_${name}_${chapter}_${String(this.entityIdSeq).padStart(2, '0')}`;
-    const event = this.eventStore.create({
-      kind: 'system',
-      type: 'register_entity',
-      chapter,
-      description: description ?? `注册实体: ${name}`,
-      params: { name, kind, entityId, tags },
-      context: 'global',
-      timestamp: new Date().toISOString(),
-      factGroupId: eventId,
-      resolvedThreads: [],
-      dependentFactIds: [],
-    });
-
-    // 写入 entities 表（直接 SQL — SQLite 适配器没有 registerEntity 方法）
-    // register_entity 事件已写入 events 表，这里补写 entities 表
+    // P1-11 修复：register_entity 的 events 写入与 entities 写入必须原子。
+    // 原实现 eventStore.create 与 entities INSERT 分属两步独立执行，若其一失败会留下
+    // "有注册事件但无实体"或反之的不一致状态，破坏实体注册表与事件溯源的对齐。
+    // EventStore 与 FactStore 在 chat.ts 装配中共享同一 Database 实例，故可用单事务包裹。
     const db = (this.factStore as any).getDatabase?.();
-    if (db) {
-      db.prepare(
-        'INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES (?, ?, ?, ?)'
-      ).run(entityId, name, kind, chapter);
-    }
+    // 无 db（如测试 mock）时退化为非事务执行，保证代码路径统一、向后兼容
+    const execAtomic = <T>(body: () => T): T => (db ? db.transaction(body)() : body());
+
+    const { event, entityId } = execAtomic(() => {
+      // P1-1 修复：实体 ID 生成消除内存 entityIdSeq，改用 entities 表存在性探测
+      // 原内存计数器进程重启后清空，配合 existing 判断会生成已占用的 ent_{name}_01，
+      // 而 entities 表 INSERT OR IGNORE 会静默丢失，导致新实体关联到旧 ID（语义错误）。
+      // 探测置于事务内，保证"选定 ID"与"写入 ID"之间无并发窗口。
+      const baseId = `ent_${name}`;
+      let eid = baseId;
+      let seq = 0;
+      if (db) {
+        // 循环探测直至找到 entities 表中不存在的 ID（持久化，重启后仍唯一）
+        while (db.prepare('SELECT 1 FROM entities WHERE id = ?').get(eid)) {
+          seq++;
+          eid = `${baseId}_${String(seq).padStart(2, '0')}`;
+        }
+      }
+
+      // 创建系统事件记录这次注册
+      // 注：factGroupId 会被 EventStore.create 内部用生成的 event.id 覆盖（1:1 关系），此处仅占位
+      const eventId = `evt_register_${name}_${chapter}_${String(seq).padStart(2, '0')}`;
+      const evt = this.eventStore.create({
+        kind: 'system',
+        type: 'register_entity',
+        chapter,
+        description: description ?? `注册实体: ${name}`,
+        params: { name, kind, entityId: eid, tags },
+        context: 'global',
+        timestamp: new Date().toISOString(),
+        factGroupId: eventId,
+        resolvedThreads: [],
+        dependentFactIds: [],
+      });
+
+      // 写入 entities 表（直接 SQL — SQLite 适配器没有 registerEntity 方法）
+      // P1-7 修复：tags 持久化到 entities.tags_json（原仅存 event.params，重启后查询丢失）
+      if (db) {
+        db.prepare(
+          'INSERT OR IGNORE INTO entities (id, name, kind, first_appearance, tags_json) VALUES (?, ?, ?, ?, ?)'
+        ).run(eid, name, kind, chapter, tags ? JSON.stringify(tags) : null);
+      }
+
+      return { event: evt, entityId: eid };
+    });
 
     const record: EntityRecord = {
       id: entityId,
@@ -611,6 +691,9 @@ export class ToolRouter {
     switch (code) {
       case ToolErrorCode.TRANSACTION_FAILED:
       case ToolErrorCode.STATE_VERSION_CONFLICT:
+        // STALE_PROPOSAL：commit_event 时乐观锁版本不匹配（世界状态在 propose→commit 间被其他提交改变），
+        // 与 STATE_VERSION_CONFLICT 同属乐观锁冲突——重新 propose 即可恢复，故标记为可恢复。
+      case ToolErrorCode.STALE_PROPOSAL:
         return true;
       default:
         return false;

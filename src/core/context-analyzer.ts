@@ -45,6 +45,8 @@ export interface ContextSignals {
   genreHints: string[];
   /** 邻近实体（同一场景/地点的其他实体） */
   nearbyEntities: string[];
+  /** 用于语义检索的自然语言查询文本（来自用户输入或写作上下文） */
+  searchText?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,21 +71,20 @@ export class ContextAnalyzer {
     const secondaryEntities: string[] = [];
     const nearbyEntities: string[] = [];
 
+    // 本章所有 location Fact 集合固定，提到循环外查询一次，避免逐实体的 N+1
+    // （原实现每个 primaryEntity 都全表查一次 location，结果本应相同）
+    const allLocationFacts = this.factStore.query({
+      predicate: 'location',
+      atChapter: ctx.chapter,
+    });
+
     // 扩展邻近实体：查询同一地点的其他实体
     for (const entityId of primaryEntities) {
-      const locFacts = this.factStore.query({
-        subject: entityId,
-        predicate: 'location',
-        atChapter: ctx.chapter,
-      });
+      // 从本章 location Fact 中筛出当前实体的位置记录
+      const locFacts = allLocationFacts.filter(f => f.subject === entityId);
       if (locFacts.length > 0) {
-        const location = locFacts[0]!.value;
-        // 查找同一位置的其他实体
-        const sameLocFacts = this.factStore.query({
-          predicate: 'location',
-          atChapter: ctx.chapter,
-        });
-        for (const lf of sameLocFacts) {
+        // 查找同一位置的其他实体（行为与原实现一致：遍历所有 location 实体，排除自身与 primary）
+        for (const lf of allLocationFacts) {
           if (lf.subject !== entityId && !primaryEntities.includes(lf.subject)) {
             nearbyEntities.push(lf.subject);
           }
@@ -118,6 +119,8 @@ export class ContextAnalyzer {
       activeScopes: ctx.context ? [ctx.context] : ['global'],
       genreHints,
       nearbyEntities: [...new Set(nearbyEntities)],
+      // 传递原始文本用于语义检索（自然语言 embedding 比实体 ID 更准确）
+      searchText: ctx.text,
     };
   }
 }

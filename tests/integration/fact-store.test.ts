@@ -73,6 +73,43 @@ describe('SQLiteFactStoreAdapter', () => {
       expect(fact.validTo).toBeNull();
     });
 
+    it('应在 assert 内部生成 embeddingText（§3.1.2 格式，非空）', () => {
+      // 回归守卫：assert 签名 Omit<Fact,'id'|'embeddingText'> 不接收 embeddingText，
+      // 须由 assert 内部生成，保证 embedding_text 列非空——sync_queue consumer 据此向量化。
+      // 此前曾误改为留空 ''，导致语义检索召回质量下降（见 push-mode §5A-6 第5章召回失败的回归）。
+      const fact = store.assert({
+        subject: 'ent_zhangsan',
+        predicate: 'realm',
+        value: '金丹期',
+        certainty: 'canonical',
+        causeEvent: 'evt_origin_01',
+        validFrom: 1,
+        validTo: null,
+      });
+
+      // 核心断言：永不为空
+      expect(fact.embeddingText).not.toBe('');
+      // §3.1.2 格式：主体显示名 + 谓词 + 值 + 章节
+      expect(fact.embeddingText).toContain('张三');   // 实体显示名解析（ent_zhangsan → 张三）
+      expect(fact.embeddingText).toContain('金丹期'); // 值
+      expect(fact.embeddingText).toContain('第1章');  // 章节标记
+    });
+
+    it('entity_ref 值的 embeddingText 应解析为目标实体显示名（非裸 ID）', () => {
+      const fact = store.assert({
+        subject: 'ent_zhangsan',
+        predicate: 'enemy_of',
+        value: makeEntityRef('ent_lisi'),
+        certainty: 'canonical',
+        causeEvent: 'evt_conflict_30',
+        validFrom: 30,
+        validTo: null,
+      });
+
+      expect(fact.embeddingText).toContain('李四');          // 目标实体显示名
+      expect(fact.embeddingText).not.toContain('ent_lisi');  // 不应残留裸实体 ID
+    });
+
     it('同一事件内的第二个 Fact ID 序号应递增', () => {
       const f1 = store.assert({
         subject: 'ent_zhangsan', predicate: 'realm', value: '金丹期',

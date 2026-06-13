@@ -1,5 +1,93 @@
 # Core 开发日志
 
+## 2026-06-12 (Phase 5 §5B 检索质量评估 + §5C 写作闭环完成)
+
+- 目标：完成 Phase 5 全部剩余工作——检索质量量化指标和完整写作闭环验证。
+- 触达层级：检索管线（ContextAnalyzer/RelevantFactRetriever/FactRenderer）+ 写作闭环（NarrativeAgent + DeepSeek + Core）。
+- §5C 实现内容：
+  - `tests/integration/writing-loop.test.ts`（新建，9 个测试，7 个场景）：世界观构建、剧情推进、新角色登场、状态查询、手动确认、多轮协商、端到端一致性
+  - 每个场景独立 Agent 实例，避免跨场景状态污染
+  - 使用真实 DeepSeek API，默认在有 API key 时运行
+- §5B 实现内容：
+  - `tests/integration/retrieval-quality.test.ts`（新建，7 个测试）：6 个自然语言查询 + 汇总报告
+  - 14 条 ground truth 标注，Recall@K + MRR 指标自动计算
+  - 基准结果：R@3=0.60, R@5=0.92, R@10=1.00, MRR=0.76, 宏观召回=100%
+  - 设置回归阈值（低于基准 20-30% 安全边际）
+- 期间修复的关键问题（§5C + §5B 累计 8 个）：
+  1. DeepSeek 思考模式 `reasoning_content` 未回传 → 400 错误
+  2. `tool_call_id` 与 assistant 消息 `tool_calls[].id` 不匹配 → 400
+  3. `call_id` 同一毫秒内重复 → 加随机后缀
+  4. `commit_event` 成功后 pending 未清理 → `handleToolSuccess` 新增参数
+  5. LLM 误调用 `commit_schema_extension` → 系统提示词禁止
+  6. 跨场景状态污染 → 每个场景独立 Agent 实例
+  7. 语义搜索用实体 ID 做 embedding → 新增 `ContextSignals.searchText` 传递自然语言
+  8. LanceDB filter 兼容性降级 → 无过滤器重试策略
+- 变更文件：`tests/integration/writing-loop.test.ts`、`tests/integration/retrieval-quality.test.ts`、`src/core/context-analyzer.ts`、`src/core/relevant-fact-retriever.ts`、`src/types/llm.ts`、`src/adapters/llm/deepseek-client.ts`、`src/agent/types.ts`、`src/agent/narrative-agent.ts`、`docs/phase5-development-plan.md`、`docs/core-development-log.md`。
+- 验证结果：
+  - `npm run typecheck` 零错误
+  - `npm test`（不含 writing-loop）全部通过（23 文件，379 测试）
+  - `npm test -- --run tests/integration/writing-loop.test.ts` 全部通过（9/9，耗时 3.5 分钟）
+  - `npm test -- --run tests/integration/retrieval-quality.test.ts` 全部通过（7/7）
+- Phase 5 状态：✅ 全部完成。NarrativeOS Core v0.1 所有计划功能均已实现并通过验证。
+
+## 2026-06-12 (Phase 5 §5A Push 模式验证完成)
+
+- 目标：验证 Phase 4 检索管线在真实多章节叙事场景中的正确性。
+- 触达层级：ContextAnalyzer → RelevantFactRetriever → FactRenderer 六段管线端到端验证。
+- 实现内容：
+  - `tests/integration/push-mode-validation.test.ts`（新建，360+ 行，16 个测试）：
+    - §5A-1 ContextAnalyzer 信号正确性（4 测试）：主要实体识别、邻近实体发现、多实体分组、空上下文降级
+    - §5A-2 六段管线去重（2 测试）：所有 Fact ID 唯一、快照中 predicate 不重复
+    - §5A-3 知识感知过滤（3 测试）：韩立视角过滤墨老 secret、无 POV 过滤返回完整结果、POV 不影响线索注入
+    - §5A-4 空上下文降级（2 测试）：空数据库不崩溃、不存在实体不崩溃
+    - §5A-5 FactRenderer 输出格式（2 测试）：Markdown 含中文实体名和章节信息、多实体渲染
+    - §5A-6 多章节叙事场景检索相关性（3 测试）：诛仙剑相关检索、天劫场景近期 Fact 优先、最新状态快照
+  - 测试数据：7 个实体（韩立/南宫婉/墨老/青云门/古修士洞府/诛仙剑/天劫洞），6 章叙事推进，22 条 Fact，完整 Knowledge 设置
+- 关键发现：
+  - 直接使用 `factStore.assert()` 写入不会自动创建 sync_queue 条目，需要在测试中手动通过 `consumer.insertEntry()` 补写
+  - POV 知识过滤正确工作：韩立视角不泄漏墨老的 secret，无 POV 过滤时完整返回
+  - 语义检索需向量已同步到 LanceDB 才能返回结果
+- 变更文件：`tests/integration/push-mode-validation.test.ts`、`docs/phase5-development-plan.md`、`docs/core-development-log.md`。
+- 验证结果：
+  - `npm run typecheck` 零错误
+  - `npm test -- --run tests/integration/push-mode-validation.test.ts` 通过（16/16）
+  - `npm test` 全量通过（22 个测试文件，372 个测试，零回归）
+- 剩余工作：
+  - Phase 5 §5B：检索质量评估（Recall@K/MRR/同步延迟指标）
+  - Phase 5 §5C：完整 Writing Loop 验证（端到端作者→Agent→Core→作者闭环）
+  - Phase 5 §6C：MCP Server（将 ToolRouter 暴露为 MCP 兼容协议）
+  - 性能基准（检索延迟 < 500ms）后置到 §5B 指标采集
+
+## 2026-06-12 (NarrativeAgent v0.1 实现完成 + 主入口导出 + live-agent-session)
+
+- 目标：完成 NarrativeAgent v0.1 全部代码实现（4 个源文件 + SQLite 持久化 + Mock 测试），将 Agent 层导出到主入口，创建真实 LLM 集成验证脚本。
+- 触达层级：Agent 层（src/agent/）+ SQLite 持久化（src/adapters/sqlite/agent-store.ts）+ 主入口导出 + 集成验证。
+- 实现内容：
+  - `src/agent/types.ts`（332 行）：NarrativeAgentRuntimeState、AgentWorkingDraft、AgentPlan、AgentMemoryState、AgentMessage、AgentTraceRecord、AgentFailureReflection、AgentLongTermMemory、AgentContextSummary、CommitAuthority、UserIntent 等全部类型定义。
+  - `src/agent/narrative-agent.ts`（1070 行）：NarrativeAgent 主类，实现完整 ReAct 循环（Reason→Act→Observe→Reflect）、意图检测（规则匹配中文关键词）、确认识别（CONFIRM_KEYWORDS/REVISE_KEYWORDS）、失败诊断（按错误码分类 + 重复失败升级为 abort_turn）、草案生命周期管理（collecting→revising→proposed→ready_to_commit→committed/abandoned）、提交主权（explicit_user_confirmation/agent_authorized_for_task/agent_authorized_for_session）、工具循环监管（maxToolSteps + maxRepeatedToolFailure）、上下文构建（注入长期记忆 + 压缩摘要 + 草案状态 + pending proposal）。
+  - `src/agent/memory-manager.ts`（305 行）：MemoryManager 类，跨会话长期记忆管理——getActiveMemories/getMemorySummaryForLlm/hasMemory/addMemory/extractFromCompletedDraft/extractPreference/archiveOldMemories/supersedeMemories。v0.1 使用规则匹配（正则提取中文偏好表达），后续可升级为 LLM 语义提取。
+  - `src/agent/context-compressor.ts`（263 行）：ContextCompressor 类，自动上下文压缩——maybeCompress/shouldCompress/executeCompression。策略：消息数 ≥30 或字符估算超 token 预算时触发，压缩 earliest 到 latest-5 的消息范围，提取关键决策和未解决问题生成摘要，标记原消息 compressed=true（visibleToLlm=false，但原文仍保留）。
+  - `src/adapters/sqlite/agent-store.ts`（636 行）：SQLiteAgentStoreAdapter 类，7 张表（agent_sessions/agent_turns/agent_working_drafts/agent_traces/agent_messages/agent_context_summaries/agent_memories）完整 CRUD，含外键约束和全覆盖索引。
+  - `tests/agent/mock-llm.ts`（76 行）：MockLLMClient，按序返回预设响应，记录所有调用历史供测试断言。
+  - `tests/agent/narrative-agent.test.ts`（518 行）：13 个集成测试，覆盖 12 个验收场景（纯文本/状态查询/多轮草案/未确认提交/确认提交/授权自动提交/工具失败/重复失败/确认识别/Trace 审计/空数据库降级/会话生命周期/Draft 管理）。
+- 设计决策：
+  - NarrativeAgent 不直接读写 Core 内部表，不绕过 ToolRouter 修改世界状态——所有写入必须通过 propose_event → commit_event 通道。
+  - 提交主权归用户：默认 explicit_user_confirmation，只有用户明确确认或 agent_authorized_for_session 模式下才自动提交。
+  - 工具失败后必须先反思再继续：diagnoseFailure 按错误码分类（SCHEMA_VALIDATION_FAILED/ENTITY_NOT_FOUND/FACT_NOT_FOUND/PROPOSAL_NOT_FOUND/STATE_VERSION_CONFLICT/RULE_VIOLATION 等），生成确定性诊断和修复建议。
+  - 重复失败升级：同一工具连续失败 3 次触发 abort_turn，防止无限重试。
+  - Agent trace 写入项目数据库（agent_traces 表），只记录关键步骤的可审计摘要，不保存完整隐藏推理链。
+  - 长期记忆只记录协作偏好和项目决策，不替代 Core Fact——角色/地点/事件的正式状态仍必须写入 Core。
+- 变更文件：`src/agent/types.ts`、`src/agent/narrative-agent.ts`、`src/agent/memory-manager.ts`、`src/agent/context-compressor.ts`、`src/adapters/sqlite/agent-store.ts`、`tests/agent/mock-llm.ts`、`tests/agent/narrative-agent.test.ts`、`tests/live-agent-session.ts`、`src/index.ts`、`package.json`、`docs/core-development-log.md`。
+- 验证结果：
+  - `npm run typecheck` 零错误
+  - `npm test` 全量通过（21 个测试文件，356 个测试，零回归）
+  - `npm test -- --run tests/agent/narrative-agent.test.ts` 通过（13/13）
+- 剩余工作：
+  - Phase 5 §5A：Push 模式端到端验证（验证 Phase 4 检索管线 + LLMClient 集成）
+  - Phase 5 §5B：检索质量评估（Recall@K/MRR 指标）
+  - Phase 5 §5C：完整 Writing Loop 验证（端到端作者→Agent→Core→作者闭环）
+  - Phase 5 §6C：MCP Server（将 ToolRouter 暴露为 MCP 兼容协议）
+
 ## 2026-06-12 (NarrativeAgent 智能体设计定稿)
 
 - 目标：将“Core 之上的智能体会话层”从临时 live 脚本和 ProjectSession 概念混用中独立出来，形成可实现的 NarrativeAgent 内部设计文档。
@@ -289,3 +377,19 @@
 - 变更文件：`src/types.ts`、`src/core/proposal-manager.ts`、`src/adapters/sqlite/event-store.ts`、`tests/integration/proposal-commit.test.ts`、`docs/Narrative-OS-Core-Architecture.md`。
 - 验证：`npm run typecheck` 通过；`npm test -- --run tests/integration/proposal-commit.test.ts` 通过。
 - 剩余风险 / 下一依赖：`commit_event` 的显式 `knowledge_changes`、`exit_scope` 自动依赖注入、ThreadResolver 生命周期合并仍在 Phase 2 或后续 Phase 中，需要继续按附录 C 顺序推进。
+
+## 2026-06-13
+
+- 目标：Phase 7 CLI 及其下全部既有代码的全面审核与交叉审核（逐行），修复所有实际问题（P0–P3，不含误报/文档/设计权衡）。
+- 触达层级：CLI 层、CoreBridge 写作层回写与访问控制、Writing Store 持久化与状态机、Core 提交管线（ID 持久化 / tags / 事务原子性 / 错误码可重试）、Core 规则/检索/retcon（推理去重 / N+1 / sync-queue 原子抢占）、Adapters（依赖注入 / LLM-embedding 超时 / embedding 失败抛错 / FactStore 类型对齐）。
+- 关键修复：
+  - CLI：`/auto` 死代码移除、LLM 调用加 AbortController 超时、实体 ID 正则收窄。
+  - CoreBridge：消除绕过审核直接置终态的访问控制面（`_markRegistered` / `_markCommitted` 内化），失败统一标 `commit_failed`。
+  - Writing Store：软删除事务化 + 查询过滤、状态机接入 service 层。
+  - Core 提交：`factSeqCounters` 内存计数器改 DB COUNT（消除重启后主键冲突）、实体 `tags_json` 列、`register_entity` 事务原子化、`STALE_PROPOSAL` 纳入可重试错误码。
+  - Core 检索/retcon：规则推理去重、`context-analyzer` N+1 查询消除、`sync-queue-consumer` 用 `UPDATE ... RETURNING` 原子抢占 pending→processing 并修复索引错位 bug。
+  - Adapters：DeepSeek/embedding 调用加超时、embedding 失败由"静默零向量"改为抛错（避免污染 ANN 检索）、`assert` 签名与 `FactStore` 接口对齐。
+- 验证期回归修复：`assert` 类型对齐时曾误将 `embeddingText` 留空 `''`，导致 sync_queue consumer 兜底拼接裸 ID 文本、push-mode §5A-6 第 5 章语义召回失败。已按架构 §3.1.2 / §2214 在 `assert` 内部生成 embeddingText（解析 `entities.name` 显示名），并补回归测试。
+- 变更文件：`src/cli/**`、`src/writing/**`、`src/core/tool-router.ts`、`src/core/query-engine.ts`、`src/core/rule-engine.ts`、`src/core/context-analyzer.ts`、`src/core/sync-queue-consumer.ts`、`src/core/retcon-engine.ts`、`src/adapters/sqlite/fact-store.ts`、`src/adapters/llm/deepseek-client.ts`、`src/adapters/embedding/siliconflow-embedder.ts`、`src/types/**`、`tests/**`、`CLAUDE.md`。
+- 验证：`npx tsc --noEmit` 通过（exit 0）；全量 `npx vitest run` 454 个测试中 453 确定性通过。唯一波动为 `tests/integration/writing-loop.test.ts`（真实 DeepSeek API，`describeIf` 门控）——跨三次运行分别失败场景 F / 通过 / 失败场景 E，属 LLM 非确定性 flakiness，非代码回归。
+- 剩余风险 / 下一依赖：(1) LanceDB 向量存储在 Writing/Agent 层的完整接线为 Phase 7 待办（非审核 bug）；(2) 完整 FactEmbedder + WorldPackage（谓词中文名/描述增强）待后续 Phase 接入，当前 `assert` 用字段组合降级实现；(3) writing-loop 集成测试依赖真实 LLM，本质非确定，建议后续引入 LLM mock 或录制回放以稳定 CI。

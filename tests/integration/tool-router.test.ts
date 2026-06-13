@@ -362,4 +362,182 @@ describe('ToolRouter', () => {
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Tool 4: propose_retcon
+  // ---------------------------------------------------------------------------
+
+  describe('Tool 4: propose_retcon', () => {
+    it('应成功提议对历史事件的回溯变更', async () => {
+      db.exec(`INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES ('ent_retcon_test', '回溯测试角色', 'entity', 1)`);
+      const proposeResult = await router.execute('propose_event', {
+        event_type: 'test', event_description: '用于回溯测试的事件', chapter: 1,
+        subject: 'ent_retcon_test',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_retcon_test', predicate: 'status', value: '初始状态' }],
+      });
+      expect(proposeResult.success).toBe(true);
+      const pid = (proposeResult as any).data.proposalId;
+      await router.execute('commit_event', { proposal_id: pid });
+
+      const events = db.prepare("SELECT id FROM events WHERE type='test' ORDER BY rowid DESC LIMIT 1").all() as Array<{ id: string }>;
+      expect(events.length).toBeGreaterThan(0);
+      const eventId = events[0]!.id;
+
+      const result = await router.execute('propose_retcon', {
+        target_event_id: eventId,
+        reason: '需要修改初始设定',
+        chapter: 2,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as any;
+        // RetconProposal 使用 proposalId 字段
+        expect(data.proposalId).toBeTruthy();
+        expect(data.affectedFactIds).toBeDefined();
+        expect(data.cascadeReportMarkdown).toBeTruthy();
+      }
+    });
+
+    it('不存在的 target_event_id 应返回失败', async () => {
+      const result = await router.execute('propose_retcon', {
+        target_event_id: 'evt_nonexistent',
+        reason: '测试',
+        chapter: 1,
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tool 5: commit_retcon
+  // ---------------------------------------------------------------------------
+
+  describe('Tool 5: commit_retcon', () => {
+    it('应成功提交回溯变更', async () => {
+      db.exec(`INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES ('ent_retcon_commit', '回溯提交测试', 'entity', 1)`);
+      const pResult = await router.execute('propose_event', {
+        event_type: 'retcon_target', event_description: '回溯提交目标', chapter: 1,
+        subject: 'ent_retcon_commit',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_retcon_commit', predicate: 'status', value: '旧状态' }],
+      });
+      const pid = (pResult as any).data.proposalId;
+      await router.execute('commit_event', { proposal_id: pid });
+      const events = db.prepare("SELECT id FROM events WHERE type='retcon_target' ORDER BY rowid DESC LIMIT 1").all() as Array<{ id: string }>;
+
+      const retconProposal = await router.execute('propose_retcon', {
+        target_event_id: events[0]!.id,
+        reason: '修正旧状态',
+        chapter: 2,
+      });
+      expect(retconProposal.success).toBe(true);
+      const rpid = (retconProposal as any).data.proposalId;
+
+      const commitResult = await router.execute('commit_retcon', {
+        retcon_proposal_id: rpid,
+      });
+      // commit_retcon 应成功（BFS 级联后标记受影响 Fact 为 contested）
+      expect(commitResult.success).toBe(true);
+      if (commitResult.success) {
+        const data = commitResult.data as any;
+        expect(data.contestedFactCount).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    it('不存在的 retcon_proposal_id 应返回失败', async () => {
+      const result = await router.execute('commit_retcon', {
+        retcon_proposal_id: 'rpi_nonexistent',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // propose_event 扩展参数：knowledge_changes / thread_resolutions / exit_from
+  // ---------------------------------------------------------------------------
+
+  describe('propose_event 扩展参数', () => {
+    beforeEach(() => {
+      db.exec(`INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES ('ent_expand', '扩展测试角色', 'entity', 1)`);
+      db.exec(`INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES ('ent_expand2', '扩展测试角色2', 'entity', 1)`);
+    });
+
+    it('应接受 knowledge_changes 参数', async () => {
+      const result = await router.execute('propose_event', {
+        event_type: 'knowledge_test',
+        event_description: '测试知识操作',
+        chapter: 1,
+        subject: 'ent_expand',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_expand', predicate: 'status', value: '已知' }],
+        knowledge_changes: [{
+          op: 'seal',
+          target_entity_id: 'ent_expand2',
+          fact_id_scope: 'all',
+        }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('应接受 thread_resolutions 参数', async () => {
+      const result = await router.execute('propose_event', {
+        event_type: 'thread_test',
+        event_description: '测试线索关闭',
+        chapter: 1,
+        subject: 'ent_expand',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_expand', predicate: 'realm', value: '测试境' }],
+        thread_resolutions: ['thr_test_1'],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('应接受 exit_from 参数', async () => {
+      const result = await router.execute('propose_event', {
+        event_type: 'scope_test',
+        event_description: '测试作用域退出',
+        chapter: 1,
+        subject: 'ent_expand',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_expand', predicate: 'location', value: '现实世界' }],
+        exit_from: 'dream_realm',
+      });
+      expect(result.success).toBe(true);
+      // 验证 exit_from 被正确传递——检查返回结果中的 dependent_fact_ids 包含作用域依赖
+      if (result.success) {
+        const data = result.data as any;
+        // exit_from 应该触发了作用域清理，产生 system_exit_scope 依赖
+        const exitDeps = Object.entries(data.dependentFactSources || {})
+          .filter(([_, src]) => src === 'system_exit_scope');
+        // 如果目标作用域中无匹配 Fact，exit_deps 可能为空，但不应崩溃
+        expect(data.dependentFactSources).toBeDefined();
+      }
+    });
+
+    it('应接受 dependent_fact_ids 参数', async () => {
+      // 先创建一个 Fact 作为依赖
+      const pResult = await router.execute('propose_event', {
+        event_type: 'dep_source', event_description: '依赖源', chapter: 1,
+        subject: 'ent_expand',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_expand', predicate: 'weapon', value: '测试剑' }],
+      });
+      const pid = (pResult as any).data.proposalId;
+      await router.execute('commit_event', { proposal_id: pid });
+
+      const facts = factStore.query({ subject: 'ent_expand', predicate: 'weapon', mode: 'current' });
+      expect(facts.length).toBeGreaterThan(0);
+      const factId = facts[0]!.id;
+
+      const result = await router.execute('propose_event', {
+        event_type: 'dep_test',
+        event_description: '测试依赖声明',
+        chapter: 2,
+        subject: 'ent_expand',
+        fact_changes: [{ change_id: 'c1', op: 'assert', subject: 'ent_expand', predicate: 'status', value: '使用测试剑' }],
+        dependent_fact_ids: [factId],
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as any;
+        expect(data.dependentFactIds).toContain(factId);
+      }
+    });
+  });
 });

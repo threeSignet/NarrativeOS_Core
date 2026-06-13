@@ -38,6 +38,8 @@ interface EntityRow {
   description: string | null;
   first_appearance: number;
   registered_at_event: string | null;
+  // P1-7: 与 entities 表的 tags_json 列对齐，存储 JSON 编码的 string[]
+  tags_json: string | null;
 }
 
 export class CoreNarrativeQueryEngine implements NarrativeQueryEngine {
@@ -188,7 +190,7 @@ export class CoreNarrativeQueryEngine implements NarrativeQueryEngine {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.db.prepare(
-      `SELECT id, name, kind, description, first_appearance, registered_at_event
+      `SELECT id, name, kind, description, first_appearance, registered_at_event, tags_json
        FROM entities ${whereClause}
        ORDER BY first_appearance ASC, id ASC`
     ).all(...params) as EntityRow[];
@@ -200,6 +202,8 @@ export class CoreNarrativeQueryEngine implements NarrativeQueryEngine {
       description: row.description ?? undefined,
       registeredAtChapter: row.first_appearance,
       registeredAtEvent: row.registered_at_event ?? '',
+      // P1-7: 反序列化 tags_json；空值（旧库或无标签）回退为 undefined，与 EntityRecord 契约一致
+      tags: row.tags_json ? (JSON.parse(row.tags_json) as string[]) : undefined,
     }));
   }
 

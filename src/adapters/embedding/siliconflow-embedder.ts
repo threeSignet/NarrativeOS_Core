@@ -59,17 +59,13 @@ export class SiliconFlowEmbeddingService implements EmbeddingService {
 
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       const batch = texts.slice(i, i + BATCH_SIZE);
-      try {
-        const vectors = await this.callApi(batch);
-        allVectors.push(...vectors);
-      } catch (err) {
-        // 降级策略：API 故障时返回零向量，写入日志告警
-        // 不阻塞主流程——丢失的向量可在后续 sync_queue 重试时补上
-        console.error(`[SiliconFlowEmbedding] API 调用失败（批次 ${i}-${i + batch.length}）: ${String(err)}`);
-        for (const _ of batch) {
-          allVectors.push(new Array(this.config.dimensions).fill(0));
-        }
-      }
+      // P1 修复：失败时抛错，而非静默返回零向量。
+      // 原降级写入零向量后，sync_queue 会标记条目 completed（不重试），且零向量在 ANN 检索中
+      // 产生错误的相似度命中，永久污染语义检索。改为抛错让调用方正确处理：
+      //   - sync_queue consumer：processRow 抛错 → 退避重试（pending→未来时间）
+      //   - relevant-fact-retriever：外层 try/catch 降级为无语义注入（不污染检索结果）
+      const vectors = await this.callApi(batch);
+      allVectors.push(...vectors);
     }
 
     return allVectors;
@@ -83,18 +79,27 @@ export class SiliconFlowEmbeddingService implements EmbeddingService {
    */
   private async callApi(texts: string[]): Promise<number[][]> {
     const url = `${this.config.baseUrl}/embeddings`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        input: texts,
-        encoding_format: 'float',
-      }),
-    });
+    // P1 修复：加 60s 超时，避免 embedding API 挂起阻塞 sync_queue 消费
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.config.model,
+          input: texts,
+          encoding_format: 'float',
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');

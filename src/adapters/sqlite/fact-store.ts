@@ -28,6 +28,7 @@ import type {
   FactQuery,
   FactIndexEntry,
   EntityRef,
+  FactStore,
 } from '../../types.js';
 import { serializeFactValue, deserializeFactValue } from '../../types.js';
 import type { FactScalarType, Certainty } from '../../types.js';
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS entities (
   description      TEXT,
   first_appearance REAL NOT NULL,                -- 首次出场章节（支持小数编号）
   registered_at_event TEXT,                       -- 注册事件 ID（Phase 2 外键约束）
+  tags_json        TEXT,                          -- P1-7: 实体标签数组（JSON），支持分类与检索过滤
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -282,9 +284,10 @@ CREATE TABLE IF NOT EXISTS wp_scope_presets (
 // SQLiteFactStoreAdapter
 // ---------------------------------------------------------------------------
 
-export class SQLiteFactStoreAdapter {
+export class SQLiteFactStoreAdapter implements FactStore {
   private db: Database.Database;
-  private factSeqCounters: Map<string, number> = new Map(); // eventId → 已生成的 Fact 序号
+  // P1-1 修复：Fact 序号改为 DB COUNT 查询（见 assert 方法），不再持有内存计数器。
+  // 原内存 Map 在进程重启后清空；若为已存在事件重新 assert 会生成重复 factId 触发主键冲突。
 
   /**
    * @param dbPath   数据库文件路径，或 ':memory:' 用于内存数据库
@@ -326,7 +329,7 @@ export class SQLiteFactStoreAdapter {
    * 自动生成 id 和 embeddingText（如果调用方未提供）。
    * causeEvent 和 validFrom 由调用方传入（通常来自 FactGroup）。
    */
-  assert(fact: Omit<Fact, 'id'>): Fact {
+  assert(fact: Omit<Fact, 'id' | 'embeddingText'>): Fact {
     const { valueType, scalarType, textValue } = this.serializeFactValue(fact.value);
 
     // 生成 Fact ID：fct_{type}_{chapter}_{seq}
@@ -337,10 +340,13 @@ export class SQLiteFactStoreAdapter {
     const chapter = eventParts[1] ?? '0';
     const eventSeq = eventParts.length > 2 ? eventParts[2] : undefined;
 
-    const counterKey = fact.causeEvent;
-    const currentSeq = this.factSeqCounters.get(counterKey) ?? 0;
-    const nextSeq = currentSeq + 1;
-    this.factSeqCounters.set(counterKey, nextSeq);
+    // P1-1 修复：Fact 序号从 DB 持久化查询，消除内存计数器依赖
+    // 事务内多次 assert 可见同事务的 INSERT，COUNT 自然递增；
+    // facts 表为 append-only（retcon 用 markInvalid 软失效，不物理删除），保证 seq 单调。
+    const existingCount = (this.db.prepare(
+      'SELECT COUNT(*) AS cnt FROM facts WHERE cause_event = ?'
+    ).get(fact.causeEvent) as { cnt: number }).cnt;
+    const nextSeq = existingCount + 1;
 
     // 构造 Fact ID
     let factId: string;
@@ -350,7 +356,12 @@ export class SQLiteFactStoreAdapter {
       factId = `fct_${eventType}_${chapter}_${String(nextSeq).padStart(2, '0')}`;
     }
 
-    const embeddingText = fact.embeddingText || '';
+    // embeddingText 由 assert 内部生成（架构 §2214：FactEmbedder 在 assert 内部生成；
+    // 接口签名 Omit<Fact,'id'|'embeddingText'> 不接收外部传入）。
+    // 此前曾留空 ''，导致 sync_queue consumer 只能用兜底拼接 "ent_xxx pred val"——
+    // 语义信号过弱，语义检索召回质量下降（见 §5A-6 第 5 章场景召回失败的回归）。
+    // 现按 §3.1.2 标准格式生成，保证 embedding_text 列非空且语义充分。
+    const embeddingText = this.buildEmbeddingText(fact);
 
     this.db.prepare(`
       INSERT INTO facts (id, subject, predicate, value_type, value_scalar_type, value_scalar, value_entity_ref,
@@ -374,6 +385,38 @@ export class SQLiteFactStoreAdapter {
     );
 
     return this.rowToFact(this.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId) as FactRow);
+  }
+
+  /**
+   * 生成 Fact 的 embeddingText（写入 LanceDB 前的向量化输入文本）
+   *
+   * 架构 §3.1.2 规范格式：`{主体显示名} 的{谓词}是 {值显示名}（第{章}章）`。
+   * 完整实现应由 FactEmbedder + WorldPackage 提供（谓词中文名、描述增强），
+   * 但 FactStore 层无 WorldPackage 访问权限，故此处为字段组合的降级实现：
+   * 主体/值均解析为实体显示名（ent_hanli → 韩立），谓词用原始名。
+   * 关键保证：embedding_text 列永不为空，避免 consumer 兜底拼接出裸 ID 文本。
+   */
+  private buildEmbeddingText(fact: Omit<Fact, 'id' | 'embeddingText'>): string {
+    const subjectName = this.resolveEntityName(fact.subject);
+    const { valueType, textValue } = serializeFactValue(fact.value);
+    // entity_ref 值解析为目标实体显示名，避免向量输入出现裸实体 ID（如 ent_lisi）
+    const valueDisplay = valueType === 'entity_ref'
+      ? this.resolveEntityName(textValue)
+      : textValue;
+    return `${subjectName} 的${fact.predicate}是 ${valueDisplay}（第${fact.validFrom}章）`;
+  }
+
+  /**
+   * 解析实体 ID 为人类可读显示名
+   *
+   * 查 entities 表 name 列；查不到（实体未注册，或 subject 本就不是实体）时
+   * 剥离 ent_ 前缀兜底，保证返回非空字符串。单行主键查询，开销可忽略。
+   */
+  private resolveEntityName(entityId: string): string {
+    if (!entityId || !entityId.startsWith('ent_')) return entityId || '';
+    const row = this.db.prepare('SELECT name FROM entities WHERE id = ?')
+      .get(entityId) as { name?: string } | undefined;
+    return row?.name ?? entityId.replace('ent_', '');
   }
 
   /**
@@ -417,7 +460,6 @@ export class SQLiteFactStoreAdapter {
       validTo: null,
       context: context ?? oldFact.context,
       relationKind: oldFact.relationKind,
-      embeddingText: oldFact.embeddingText,
       schemaVersion: oldFact.schemaVersion,
     });
 
@@ -453,7 +495,6 @@ export class SQLiteFactStoreAdapter {
             validTo: change.payload.validTo ?? null,
             context: change.payload.context ?? 'global',
             relationKind: change.payload.relationKind,
-            embeddingText: '',
             schemaVersion: change.payload.schemaVersion ?? 1,
           });
           if (change.changeId) {
@@ -501,7 +542,6 @@ export class SQLiteFactStoreAdapter {
             validTo: null,
             context: change.payload.context ?? targetFact.context,
             relationKind: change.payload.relationKind ?? targetFact.relationKind,
-            embeddingText: targetFact.embeddingText,
             schemaVersion: change.payload.schemaVersion ?? targetFact.schemaVersion,
           });
           if (change.changeId) {

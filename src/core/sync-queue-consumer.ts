@@ -66,11 +66,18 @@ export class SyncQueueConsumer {
    * @returns 处理结果统计
    */
   async processPending(): Promise<{ processed: number; failed: number }> {
+    // P1 修复：原子抢占 pending → processing，防止并发 consumer 重复处理同一批条目
+    // （多 worker 场景下，两个 processPending 可能 SELECT 到相同 pending 行，各自处理一遍，
+    // 导致 LanceDB 重复写入向量）。RETURNING 子句需 SQLite 3.35+（better-sqlite3 内置版本满足）。
     const rows = this.db.prepare(`
-      SELECT * FROM sync_queue
-      WHERE status = 'pending' AND next_retry_at <= datetime('now')
-      ORDER BY id ASC
-      LIMIT 100
+      UPDATE sync_queue
+      SET status = 'processing'
+      WHERE id IN (
+        SELECT id FROM sync_queue
+        WHERE status = 'pending' AND next_retry_at <= datetime('now')
+        ORDER BY id ASC LIMIT 100
+      )
+      RETURNING *
     `).all() as SyncQueueRow[];
 
     let processed = 0;
@@ -92,10 +99,10 @@ export class SyncQueueConsumer {
           `).run(newRetryCount, String(err).slice(0, 500), row.id);
           console.error(`[SyncQueue] 条目 ${row.id} 重试耗尽 (${newRetryCount}/${row.max_retries}): ${String(err).slice(0, 200)}`);
         } else {
-          // 指数退避：2^retry × 2秒
+          // 指数退避：2^retry × 2秒。失败后 processing → pending（等待退避后重试）
           const delay = Math.pow(2, newRetryCount) * 2;
           this.db.prepare(`
-            UPDATE sync_queue SET retry_count = ?, next_retry_at = datetime('now', '+' || ? || ' seconds'), last_error = ?
+            UPDATE sync_queue SET status = 'pending', retry_count = ?, next_retry_at = datetime('now', '+' || ? || ' seconds'), last_error = ?
             WHERE id = ?
           `).run(newRetryCount, Math.floor(delay), String(err).slice(0, 500), row.id);
         }
@@ -144,10 +151,13 @@ export class SyncQueueConsumer {
    * 从 SQLite facts 表读取 Fact，调用 Embedding API 构建 VectorEntry
    */
   private async buildVectorEntries(factIds: string[]): Promise<VectorEntry[]> {
-    const entries: VectorEntry[] = [];
+    // P1 修复：原实现分两轮循环各查一次 facts（2N 次 SELECT），且第二轮用 factIds[i] 索引——
+    // 当某 factId 不存在时 texts.length < factIds.length，导致索引错位查到错误的 Fact。
+    // 改为单轮查询并缓存 row，同时消除索引错位 bug。
+    const rows: any[] = [];
     const texts: string[] = [];
 
-    // 批量读取 Fact
+    // 读取 Fact 并构建 embedding 文本（单轮查询，缓存 row 供后续组装）
     for (const fid of factIds) {
       const row = this.db.prepare(
         'SELECT id, subject, predicate, value_scalar, value_entity_ref, embedding_text, certainty, valid_from, valid_to, is_current, context FROM facts WHERE id = ?'
@@ -155,6 +165,7 @@ export class SyncQueueConsumer {
       if (!row) continue;
 
       const text = row.embedding_text || `${row.subject} ${row.predicate} ${row.value_scalar ?? row.value_entity_ref ?? ''}`;
+      rows.push(row);
       texts.push(text);
     }
 
@@ -163,13 +174,10 @@ export class SyncQueueConsumer {
     // 批量向量化
     const vectors = await this.embedder.embedBatch(texts);
 
-    // 组装 VectorEntry
-    for (let i = 0; i < texts.length; i++) {
-      const row = this.db.prepare(
-        'SELECT id, subject, predicate, value_scalar, value_entity_ref, embedding_text, certainty, valid_from, valid_to, is_current, context FROM facts WHERE id = ?'
-      ).get(factIds[i]!) as any;
-      if (!row) continue;
-
+    // 组装 VectorEntry（复用已缓存的 row，无需二次查询）
+    const entries: VectorEntry[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
       entries.push({
         id: row.id,
         vector: vectors[i] ?? new Array(1024).fill(0),

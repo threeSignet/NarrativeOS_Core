@@ -570,15 +570,8 @@ export class RetconEngine {
         throw new Error('STALE_PROPOSAL: 状态版本冲突');
       }
 
-      // 2. 创建系统事件
-    const allAffectedFactIds: string[] = [];
-    for (const [, facts] of proposal.cascadeResult.factsByLevel) {
-      for (const f of facts) {
-        allAffectedFactIds.push(f.id);
-      }
-    }
-
-    // 3. 创建系统事件
+      // allAffectedFactIds 复用事务外（第 557 行）已构建的列表，事务闭包可直接捕获外层 const，
+      // 无需在事务内重复构建（原代码在此处重建并同名遮蔽外层变量，是冗余且易混淆）
     const targetEvent = eventStore.getById(proposal.targetEventId);
     // 生成 retcon 事件的 seq
     const seq = (db.prepare("SELECT COUNT(*) as cnt FROM events WHERE type = 'retcon'").get() as { cnt: number }).cnt + 1;

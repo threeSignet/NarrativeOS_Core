@@ -126,6 +126,9 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
 
     const message = (choice as Record<string, unknown>).message as Record<string, unknown> | undefined;
     const content: string = typeof message?.content === 'string' ? message.content : '';
+    // DeepSeek 思考模式：捕获 reasoning_content 以便后续请求回传
+    const reasoningContent: string | undefined =
+      typeof message?.reasoning_content === 'string' ? message.reasoning_content as string : undefined;
 
     // 解析 tool_calls：DeepSeek 返回的格式与 OpenAI 一致
     const rawToolCalls = message?.tool_calls as Array<Record<string, unknown>> | undefined;
@@ -140,6 +143,7 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
 
     return {
       content: fallback.cleanContent,
+      reasoningContent,
       toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : fallback.toolCalls,
     };
   }
@@ -207,6 +211,33 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
   }
 
   // =========================================================================
+  // chatWithToolsStream — LLMClient 接口的可选流式方法
+  // =========================================================================
+
+  /**
+   * 流式带工具对话（实现 LLMClient.chatWithToolsStream 可选接口）
+   *
+   * 与 chatStreamWithTools 功能相同，但返回类型适配 ToolCallResult，
+   * 以便 NarrativeAgent 层统一消费。
+   */
+  async chatWithToolsStream(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onToken: (token: string) => void,
+    options?: ChatOptions,
+  ): Promise<ToolCallResult> {
+    const result = await this.chatStreamWithTools(messages, tools, onToken, options);
+    return {
+      content: result.content,
+      reasoningContent: result.reasoningContent,
+      toolCalls: result.toolCalls?.map(tc => ({
+        name: tc.name,
+        arguments: tc.arguments,
+      })),
+    };
+  }
+
+  // =========================================================================
   // 内部方法
   // =========================================================================
 
@@ -223,14 +254,15 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
   ): Promise<{ content: string; reasoningContent?: string; toolCalls?: ParsedToolCall[] }> {
     const url = `${this.config.baseUrl}/chat/completions`;
 
-    const response = await fetch(url, {
+    // P1 修复：加 90s 超时（流式输出通常较长），避免连接建立阶段挂起阻塞 ReAct
+    const response = await this.fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, 90000);
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '');
@@ -361,14 +393,15 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const url = `${this.config.baseUrl}/chat/completions`;
-        const response = await fetch(url, {
+        // P1 修复：加 60s 超时，避免 TCP 挂起无限阻塞 ReAct 循环（超时转为可重试的 AbortError）
+        const response = await this.fetchWithTimeout(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${this.config.apiKey}`,
           },
           body: JSON.stringify(body),
-        });
+        }, 60000);
 
         // ---- HTTP 错误层 ----
         if (!response.ok) {
@@ -424,13 +457,32 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
   }
 
   /**
+   * 带超时的 fetch 封装
+   *
+   * P1 修复：原生 fetch 无超时，TCP 挂起或远端不响应会无限阻塞 ReAct 循环
+   * （maxWallClockMs 只在 tool step 边界检查，无法中断进行中的 HTTP 请求）。
+   * 用 AbortController 强制超时，将网络挂起转化为可重试的 AbortError。
+   */
+  private async fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * 判断错误是否可重试
    *
-   * 可重试：429 限流、5xx 服务端错误、网络超时/DNS 错误
+   * 可重试：429 限流、5xx 服务端错误、网络超时/DNS 错误、请求超时（AbortError）
    * 不可重试：401 认证、400 参数、JSON 解析错误（说明响应格式异常，重试无意义）
    */
   private isRetryableError(error: Error): boolean {
     const msg = error.message;
+    // AbortController 触发的请求超时（网络挂起），属瞬时故障，可重试
+    if (error.name === 'AbortError' || msg.includes('aborted') || msg.includes('timeout')) return true;
     // 从错误消息中识别 HTTP 状态码（已在 callApi 中写入 message）
     if (msg.includes('429')) return true;
     if (msg.includes('500') || msg.includes('502') || msg.includes('503')) return true;

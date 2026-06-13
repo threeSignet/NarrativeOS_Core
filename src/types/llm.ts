@@ -22,11 +22,27 @@ export interface EmbeddingService {
 export interface LLMClient {
   chat(messages: ChatMessage[], options?: ChatOptions): Promise<string>;
   chatWithTools(messages: ChatMessage[], tools: ToolDefinition[], options?: ChatOptions): Promise<ToolCallResult>;
+  /**
+   * 流式带工具对话（可选实现）。
+   * 当 LLM 返回 token 时实时回调 onToken，同时累积完整结果。
+   * 如果适配器不支持流式，NarrativeAgent 自动降级为 chatWithTools。
+   */
+  chatWithToolsStream?(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onToken: (token: string) => void,
+    options?: ChatOptions,
+  ): Promise<ToolCallResult>;
 }
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /**
+   * DeepSeek 思考模式：assistant 消息的推理链。
+   * 必须在后续请求中原样回传，否则 API 返回 400。
+   */
+  reasoning_content?: string;
   /**
    * 当 role='assistant' 且 LLM 发起工具调用时填充。
    * 每个 tool_call 包含唯一 id，调用方执行后将结果通过 role='tool' + tool_call_id 回传。
@@ -57,6 +73,8 @@ export interface ToolDefinition {
 
 export interface ToolCallResult {
   content: string;
+  /** DeepSeek 思考模式：推理链内容，必须在后续请求中原样回传 */
+  reasoningContent?: string;
   toolCalls?: Array<{
     name: string;
     arguments: Record<string, unknown>;

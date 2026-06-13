@@ -123,23 +123,39 @@ export class RelevantFactRetriever {
     // Step 2: 语义检索（LanceDB ANN）
     let semanticFacts: Fact[] = [];
     try {
-      const allEntities = [
-        ...signals.primaryEntities,
-        ...signals.secondaryEntities,
-        ...signals.nearbyEntities,
-      ];
-      const queryText = allEntities.join('，') + ' ' + (signals.genreHints.join(' '));
+      // 优先使用用户输入的自然语言文本做语义检索（embedding 质量远优于实体 ID 拼接）
+      // 降级：无文本时用实体 ID 拼接
+      const searchText = signals.searchText
+        || [...signals.primaryEntities, ...signals.secondaryEntities, ...signals.nearbyEntities].join('，');
+      const queryText = searchText + ' ' + (signals.genreHints.join(' '));
       if (queryText.trim()) {
         const queryEmbedding = await this.embedder.embed(queryText);
-        const scoredResults = await this.vectorStore.search({
-          embedding: queryEmbedding,
-          topK,
-          filter: {
-            is_current: true,
-            certainty: 'canonical',
-            context: signals.activeScopes[0] ?? 'global',
-          },
-        });
+        // 先尝试带过滤器的搜索，再降级为无过滤器搜索（LanceDB filter 兼容性）
+        let scoredResults: Array<{ factId: string; score: number }> = [];
+        try {
+          scoredResults = await this.vectorStore.search({
+            embedding: queryEmbedding,
+            topK,
+            filter: {
+              is_current: true,
+              certainty: 'canonical',
+              context: signals.activeScopes[0] ?? 'global',
+            },
+          });
+        } catch {
+          // LanceDB filter 语法错误时降级
+        }
+        // 如果带过滤器的搜索无结果，尝试无过滤器搜索（降级策略）
+        if (scoredResults.length === 0) {
+          try {
+            scoredResults = await this.vectorStore.search({
+              embedding: queryEmbedding,
+              topK,
+            });
+          } catch {
+            // 完全失败时保持空结果
+          }
+        }
 
         for (const sr of scoredResults) {
           if (!seen.has(sr.factId)) {

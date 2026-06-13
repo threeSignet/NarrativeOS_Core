@@ -369,6 +369,15 @@ export class RuleEngine {
         }
       }
 
+      // 推理产物可能跨规则、跨轮次重复（例如多条 InferenceRule 各自推断出 A↔B 双向关系，
+      // 或同一 Fact 在不同深度被重复触发）。按业务唯一键去重，避免下游 applyFactGroup 写入重复行。
+      // 注意：不能用 Fact.id 作 key——推理产物此处 id 为空串占位（真实 id 由 applyFactGroup 生成）。
+      const inferredKey = (f: Omit<Fact, 'id' | 'embeddingText'>): string =>
+        `${f.subject}|${f.predicate}|${String(f.value)}|${f.context ?? ''}`;
+      const seenInferredKeys = new Set<string>();
+      // 用种子 Fact 初始化已见集合，防止推理产物与输入 Fact 重复（输入已作为 originalChanges 写入）
+      for (const sf of seedFacts) seenInferredKeys.add(inferredKey(sf));
+
       let currentRoundFacts = seedFacts;
       const allInferred: Omit<Fact, 'id' | 'embeddingText'>[] = [];
 
@@ -391,6 +400,9 @@ export class RuleEngine {
                 state.budgetExhausted = true;
                 break;
               }
+              const dedupeKey = inferredKey(inf);
+              if (seenInferredKeys.has(dedupeKey)) continue; // 跳过重复推断的 Fact（跨规则/跨轮次去重）
+              seenInferredKeys.add(dedupeKey);
               nextRoundFacts.push(inf);
               allInferred.push(inf);
               state.generatedFactCount++;

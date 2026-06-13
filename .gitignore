@@ -6,3 +6,8 @@ dist/
 *.db-wal
 lancedb_data/
 snapshots/
+
+# AI 编码工具产物（本地产物/运行时状态，勿提交）
+.codegraph/
+.reasonix/
+.mimocode/
