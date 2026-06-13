@@ -1,0 +1,1464 @@
+// =============================================================================
+// SQLiteWritingStore — 写作层持久化适配器
+// =============================================================================
+// Phase 7 写作层持久化：11 张表（writing_projects / writing_author_goals /
+// writing_idea_cards / writing_blueprints / writing_drafts /
+// writing_entity_sketches / writing_pending_decisions /
+// writing_proposal_views / writing_audit_logs / writing_core_refs /
+// writing_jobs）。
+//
+// 设计要点：
+//   - 与 FactStore / AgentStore 共享同一 SQLite 连接（同库不同表）
+//   - DDL 幂等：使用 CREATE TABLE IF NOT EXISTS
+//   - 所有写入使用 prepared statement
+//   - JSON 字段使用 JSON.stringify / JSON.parse 序列化
+//   - ID 格式：{prefix}_{timestamp}_{random}
+//   - 软删除：deleted_at TEXT（NULL = 活跃，非 NULL = 已删除）
+//   - 外键约束：关联 writing_projects
+//   - 查询自动过滤 deleted_at IS NOT NULL
+//
+// 与现有代码的关系：
+//   - agent-store.ts：同库同模式，writing_* 表与 agent_* 表平级
+//   - fact-store.ts：共享 Database 实例，通过 getDatabase() 获取
+//   - 写入流：Core 表由 Core 引擎写，writing_* 表由 Writing Layer 写
+//
+// 对应设计文档：
+//   Phase7-Refinement.md §3（DDL）+ §6（类型）+ §16（CRUD）
+//   Writing-Layer-Feature-Spec.md §30（数据模型）
+// =============================================================================
+
+import type Database from 'better-sqlite3';
+import type {
+  WritingProject, ProjectStatus, WorkspaceMode,
+  AuthorGoal, GoalKind, GoalPriority, GoalScope, GoalStatus,
+  IdeaCard, IdeaKind, IdeaMaturity, IdeaSource, AnalysisPolicy,
+  ProjectBlueprint, BlueprintMaturity, BlueprintTypeDef, BlueprintChangeSuggestion,
+  WritingDraft, DraftKind, DraftStatus,
+  WritingEntitySketch, EntitySketchStatus,
+  PendingDecisionItem, DecisionKind,
+  WritingProposalView, ProposalType, ProposalViewStatus,
+  FactDiffEntry, RuleWarning,
+  WritingAuditLog, AuditTrigger, AuditResult,
+  WritingCoreRef, WritingObjectType, CoreObjectType, RefStatus,
+  WritingJob, JobStatus, JobCreator,
+} from '../models/types.js';
+import type { SourceRef } from '../models/source-ref.js';
+
+// =============================================================================
+// DDL — 11 张写作层表
+// =============================================================================
+
+export const WRITING_DDL = `
+-- W.1 writing_projects：作品项目根容器
+CREATE TABLE IF NOT EXISTS writing_projects (
+  id                   TEXT PRIMARY KEY,
+  title                TEXT NOT NULL,
+  premise              TEXT,
+  status               TEXT NOT NULL DEFAULT 'planning'
+                       CHECK(status IN ('planning','drafting','reviewing','paused','archived')),
+  active_blueprint_id  TEXT,
+  current_draft_id     TEXT,
+  workspace_mode       TEXT NOT NULL DEFAULT 'planning'
+                       CHECK(workspace_mode IN ('planning','writing','reviewing','analysis','importing')),
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wp_status ON writing_projects(status);
+CREATE INDEX IF NOT EXISTS idx_wp_blueprint ON writing_projects(active_blueprint_id);
+
+-- W.2 writing_author_goals：作者目标与禁用方向
+CREATE TABLE IF NOT EXISTS writing_author_goals (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  text             TEXT NOT NULL,
+  kind             TEXT NOT NULL DEFAULT 'goal'
+                   CHECK(kind IN ('goal','avoid','style','reader_experience')),
+  priority         TEXT NOT NULL DEFAULT 'normal'
+                   CHECK(priority IN ('low','normal','high')),
+  scope            TEXT NOT NULL DEFAULT 'project'
+                   CHECK(scope IN ('project','volume','chapter','character','thread')),
+  status           TEXT NOT NULL DEFAULT 'active'
+                   CHECK(status IN ('active','paused','archived')),
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wag_project ON writing_author_goals(project_id, status);
+
+-- W.3 writing_idea_cards：灵感与原始想法
+CREATE TABLE IF NOT EXISTS writing_idea_cards (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  content          TEXT NOT NULL,
+  summary          TEXT,
+  kind             TEXT NOT NULL DEFAULT 'other'
+                   CHECK(kind IN ('premise','character','location','faction','item','mechanism','theme','style','reference','dialogue','scene_image','event','other')),
+  maturity         TEXT NOT NULL DEFAULT 'raw'
+                   CHECK(maturity IN ('raw','candidate','structured','ready_for_draft','archived')),
+  tags_json        TEXT NOT NULL DEFAULT '[]',
+  source           TEXT NOT NULL DEFAULT 'manual'
+                   CHECK(source IN ('manual','chat','import','prose_selection','agent_suggestion')),
+  analysis_policy  TEXT NOT NULL DEFAULT 'normal'
+                   CHECK(analysis_policy IN ('normal','quiet','do_not_analyze')),
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  linked_draft_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wic_project ON writing_idea_cards(project_id, maturity);
+CREATE INDEX IF NOT EXISTS idx_wic_kind ON writing_idea_cards(project_id, kind);
+
+-- W.4 writing_blueprints：项目柔性创作蓝图
+CREATE TABLE IF NOT EXISTS writing_blueprints (
+  id                     TEXT PRIMARY KEY,
+  project_id             TEXT NOT NULL,
+  version                INTEGER NOT NULL DEFAULT 1,
+  maturity               TEXT NOT NULL DEFAULT 'implicit'
+                         CHECK(maturity IN ('implicit','drafted','reviewed','active','evolving','archived','superseded')),
+  entity_types_json      TEXT NOT NULL DEFAULT '[]',
+  relation_types_json    TEXT NOT NULL DEFAULT '[]',
+  spatial_node_types_json TEXT NOT NULL DEFAULT '[]',
+  spatial_edge_types_json TEXT NOT NULL DEFAULT '[]',
+  workflow_presets_json  TEXT NOT NULL DEFAULT '[]',
+  graph_view_presets_json TEXT NOT NULL DEFAULT '[]',
+  source_refs_json       TEXT NOT NULL DEFAULT '[]',
+  change_suggestions_json TEXT NOT NULL DEFAULT '[]',
+  superseded_by          TEXT,
+  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at             TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wb_project ON writing_blueprints(project_id, maturity);
+CREATE INDEX IF NOT EXISTS idx_wb_active ON writing_blueprints(project_id)
+  WHERE maturity IN ('active', 'evolving');
+
+-- W.5 writing_drafts：草案与事件草稿
+CREATE TABLE IF NOT EXISTS writing_drafts (
+  id                      TEXT PRIMARY KEY,
+  project_id              TEXT NOT NULL,
+  kind                    TEXT NOT NULL DEFAULT 'scene'
+                          CHECK(kind IN ('concept','setting','scene','chapter','act','event','prose','rule','thread')),
+  chapter                 INTEGER NOT NULL DEFAULT 1,
+  title                   TEXT,
+  content                 TEXT NOT NULL DEFAULT '',
+  summary                 TEXT,
+  status                  TEXT NOT NULL DEFAULT 'drafting'
+                          CHECK(status IN ('drafting','ready_to_simulate','simulated','committed','archived','error')),
+  source_refs_json        TEXT NOT NULL DEFAULT '[]',
+  linked_proposal_view_id TEXT,
+  version_group_id        TEXT,
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at              TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wd_project ON writing_drafts(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_wd_proposal ON writing_drafts(linked_proposal_view_id);
+
+-- W.6 writing_entity_sketches：候选实体与 Core 注册链接
+CREATE TABLE IF NOT EXISTS writing_entity_sketches (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  display_name     TEXT NOT NULL,
+  type_label       TEXT NOT NULL DEFAULT 'unknown',
+  summary          TEXT,
+  aliases_json     TEXT NOT NULL DEFAULT '[]',
+  tags_json        TEXT NOT NULL DEFAULT '[]',
+  status           TEXT NOT NULL DEFAULT 'candidate'
+                   CHECK(status IN ('hint','candidate','approved','registered','deprecated','merged','error')),
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  core_entity_id   TEXT,
+  core_kind        TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wes_project ON writing_entity_sketches(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_wes_core ON writing_entity_sketches(core_entity_id);
+CREATE INDEX IF NOT EXISTS idx_wes_name ON writing_entity_sketches(project_id, display_name);
+
+-- W.7 writing_pending_decisions：待确认事项
+CREATE TABLE IF NOT EXISTS writing_pending_decisions (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  kind             TEXT NOT NULL
+                   CHECK(kind IN ('confirm_entity','confirm_draft','confirm_proposal','confirm_retcon','confirm_blueprint','confirm_rule','general')),
+  title            TEXT NOT NULL,
+  description      TEXT,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  linked_object_id TEXT,
+  linked_object_type TEXT,
+  status           TEXT NOT NULL DEFAULT 'open'
+                   CHECK(status IN ('open','resolved','dismissed','expired')),
+  resolved_at      TEXT,
+  resolution_note  TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpend_project ON writing_pending_decisions(project_id, status);
+
+-- W.8 writing_proposal_views：Proposal Review 视图状态
+CREATE TABLE IF NOT EXISTS writing_proposal_views (
+  id                     TEXT PRIMARY KEY,
+  project_id             TEXT NOT NULL,
+  source_draft_id        TEXT,
+  source_entity_sketch_id TEXT,
+  proposal_type          TEXT NOT NULL DEFAULT 'event'
+                         CHECK(proposal_type IN ('event','entity_registration','thread','knowledge','schema_extension','retcon')),
+  core_proposal_id       TEXT,
+  core_bridge_result_json TEXT NOT NULL DEFAULT '{}',
+  status                 TEXT NOT NULL DEFAULT 'open'
+                         CHECK(status IN ('open','author_approved','author_rejected','committed','commit_failed','expired','superseded')),
+  human_summary          TEXT,
+  fact_diff_json         TEXT NOT NULL DEFAULT '[]',
+  involved_entity_ids_json TEXT NOT NULL DEFAULT '[]',
+  rule_warnings_json     TEXT NOT NULL DEFAULT '[]',
+  author_decision        TEXT,
+  author_decision_at     TEXT,
+  core_event_id          TEXT,
+  commit_error_json      TEXT,
+  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at             TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpv_project ON writing_proposal_views(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_wpv_core ON writing_proposal_views(core_proposal_id);
+
+-- W.9 writing_audit_logs：操作与提交审计
+CREATE TABLE IF NOT EXISTS writing_audit_logs (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL,
+  action          TEXT NOT NULL,
+  target_type     TEXT,
+  target_id       TEXT,
+  trigger_source  TEXT NOT NULL DEFAULT 'author_action',
+  result          TEXT NOT NULL DEFAULT 'success'
+                  CHECK(result IN ('success','failure','partial')),
+  detail_json     TEXT NOT NULL DEFAULT '{}',
+  error_code      TEXT,
+  request_id      TEXT,
+  session_id      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wal_project ON writing_audit_logs(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_wal_target ON writing_audit_logs(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_wal_target_id ON writing_audit_logs(target_id);
+CREATE INDEX IF NOT EXISTS idx_wal_action ON writing_audit_logs(project_id, action);
+
+-- W.10 writing_core_refs：写作层对象到 Core ID 的引用索引
+CREATE TABLE IF NOT EXISTS writing_core_refs (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL,
+  writing_object_type TEXT NOT NULL,
+  writing_object_id   TEXT NOT NULL,
+  core_object_type    TEXT NOT NULL
+                      CHECK(core_object_type IN ('entity','event','fact','thread','knowledge','proposal')),
+  core_object_id      TEXT NOT NULL,
+  ref_status          TEXT NOT NULL DEFAULT 'active'
+                      CHECK(ref_status IN ('active','stale','broken')),
+  last_verified_at    TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at          TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wcr_writing ON writing_core_refs(writing_object_type, writing_object_id);
+CREATE INDEX IF NOT EXISTS idx_wcr_core ON writing_core_refs(core_object_type, core_object_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wcr_unique ON writing_core_refs(writing_object_type, writing_object_id, core_object_type, core_object_id);
+
+-- W.11 writing_jobs：异步任务
+CREATE TABLE IF NOT EXISTS writing_jobs (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL,
+  job_type        TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'queued'
+                  CHECK(status IN ('queued','running','succeeded','failed','cancelled','needs_attention')),
+  progress        REAL NOT NULL DEFAULT 0.0,
+  summary         TEXT,
+  input_refs_json TEXT NOT NULL DEFAULT '[]',
+  output_refs_json TEXT NOT NULL DEFAULT '[]',
+  error_json      TEXT,
+  created_by      TEXT NOT NULL DEFAULT 'system'
+                  CHECK(created_by IN ('author','agent','system')),
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at      TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wj_project ON writing_jobs(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_wj_type ON writing_jobs(project_id, job_type, status);
+`;
+
+// =============================================================================
+// ID 生成（与 agent-store.ts 模式一致）
+// =============================================================================
+
+/** 写作层 ID 前缀 */
+const PREFIX = {
+  project:          'wprj',
+  author_goal:      'wagl',
+  idea_card:        'wicd',
+  blueprint:        'wblp',
+  draft:            'wdft',
+  entity_sketch:    'wesk',
+  pending_decision: 'wpdc',
+  proposal_view:    'wpvw',
+  audit_log:        'waul',
+  core_ref:         'wcref',
+  job:              'wjob',
+} as const;
+
+function makeId(prefix: string): string {
+  const ts = Date.now();
+  const rnd = Math.random().toString(36).slice(2, 8);
+  return `${prefix}_${ts}_${rnd}`;
+}
+
+// =============================================================================
+// JSON 序列化辅助（与 agent-store.ts 模式一致）
+// =============================================================================
+
+function safeStringify(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function safeParseJson<T = unknown>(text: string, id: string, field: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`writing-store: JSON 解析失败 — ${field} in record ${id}`);
+  }
+}
+
+// =============================================================================
+// 行类型（数据库返回的原始格式，snake_case）
+// =============================================================================
+
+export interface ProjectRow {
+  id: string;
+  title: string;
+  premise: string | null;
+  status: string;
+  active_blueprint_id: string | null;
+  current_draft_id: string | null;
+  workspace_mode: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface AuthorGoalRow {
+  id: string;
+  project_id: string;
+  text: string;
+  kind: string;
+  priority: string;
+  scope: string;
+  status: string;
+  source_refs_json: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface IdeaCardRow {
+  id: string;
+  project_id: string;
+  content: string;
+  summary: string | null;
+  kind: string;
+  maturity: string;
+  tags_json: string;
+  source: string;
+  analysis_policy: string;
+  source_refs_json: string;
+  linked_draft_ids_json: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface BlueprintRow {
+  id: string;
+  project_id: string;
+  version: number;
+  maturity: string;
+  entity_types_json: string;
+  relation_types_json: string;
+  spatial_node_types_json: string;
+  spatial_edge_types_json: string;
+  workflow_presets_json: string;
+  graph_view_presets_json: string;
+  source_refs_json: string;
+  change_suggestions_json: string;
+  superseded_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface DraftRow {
+  id: string;
+  project_id: string;
+  kind: string;
+  chapter: number;
+  title: string | null;
+  content: string;
+  summary: string | null;
+  status: string;
+  source_refs_json: string;
+  linked_proposal_view_id: string | null;
+  version_group_id: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface EntitySketchRow {
+  id: string;
+  project_id: string;
+  display_name: string;
+  type_label: string;
+  summary: string | null;
+  aliases_json: string;
+  tags_json: string;
+  status: string;
+  source_refs_json: string;
+  core_entity_id: string | null;
+  core_kind: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface PendingDecisionRow {
+  id: string;
+  project_id: string;
+  kind: string;
+  title: string;
+  description: string | null;
+  source_refs_json: string;
+  linked_object_id: string | null;
+  linked_object_type: string | null;
+  status: string;
+  resolved_at: string | null;
+  resolution_note: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface ProposalViewRow {
+  id: string;
+  project_id: string;
+  source_draft_id: string | null;
+  source_entity_sketch_id: string | null;
+  proposal_type: string;
+  core_proposal_id: string | null;
+  core_bridge_result_json: string;
+  status: string;
+  human_summary: string | null;
+  fact_diff_json: string;
+  involved_entity_ids_json: string;
+  rule_warnings_json: string;
+  author_decision: string | null;
+  author_decision_at: string | null;
+  core_event_id: string | null;
+  commit_error_json: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface AuditLogRow {
+  id: string;
+  project_id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  trigger_source: string;
+  result: string;
+  detail_json: string;
+  error_code: string | null;
+  request_id: string | null;
+  session_id: string | null;
+  created_at: string;
+}
+
+export interface CoreRefRow {
+  id: string;
+  project_id: string;
+  writing_object_type: string;
+  writing_object_id: string;
+  core_object_type: string;
+  core_object_id: string;
+  ref_status: string;
+  last_verified_at: string | null;
+  created_at: string;
+}
+
+export interface JobRow {
+  id: string;
+  project_id: string;
+  job_type: string;
+  status: string;
+  progress: number;
+  summary: string | null;
+  input_refs_json: string;
+  output_refs_json: string;
+  error_json: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// =============================================================================
+// 行 → 领域对象转换（snake_case → camelCase）
+// =============================================================================
+
+function rowToProject(row: ProjectRow): WritingProject {
+  return {
+    id: row.id,
+    title: row.title,
+    premise: row.premise ?? undefined,
+    status: row.status as ProjectStatus,
+    activeBlueprintId: row.active_blueprint_id ?? undefined,
+    currentDraftId: row.current_draft_id ?? undefined,
+    workspaceMode: row.workspace_mode as WorkspaceMode,
+    sourceRefs: [], // Project 的 sourceRefs 在服务层构建，不在此层
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToGoal(row: AuthorGoalRow): AuthorGoal {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    text: row.text,
+    kind: row.kind as GoalKind,
+    priority: row.priority as GoalPriority,
+    scope: row.scope as GoalScope,
+    status: row.status as GoalStatus,
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToIdeaCard(row: IdeaCardRow): IdeaCard {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    content: row.content,
+    summary: row.summary ?? undefined,
+    kind: row.kind as IdeaKind,
+    maturity: row.maturity as IdeaMaturity,
+    tags: safeParseJson<string[]>(row.tags_json, row.id, 'tags_json'),
+    source: row.source as IdeaSource,
+    analysisPolicy: row.analysis_policy as AnalysisPolicy,
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
+    linkedDraftIds: safeParseJson<string[]>(row.linked_draft_ids_json, row.id, 'linked_draft_ids_json'),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToBlueprint(row: BlueprintRow): ProjectBlueprint {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    version: row.version,
+    maturity: row.maturity as BlueprintMaturity,
+    entityTypes: safeParseJson<BlueprintTypeDef[]>(row.entity_types_json, row.id, 'entity_types_json'),
+    relationTypes: safeParseJson<BlueprintTypeDef[]>(row.relation_types_json, row.id, 'relation_types_json'),
+    spatialNodeTypes: safeParseJson<BlueprintTypeDef[]>(row.spatial_node_types_json, row.id, 'spatial_node_types_json'),
+    spatialEdgeTypes: safeParseJson<BlueprintTypeDef[]>(row.spatial_edge_types_json, row.id, 'spatial_edge_types_json'),
+    workflowPresets: safeParseJson<string[]>(row.workflow_presets_json, row.id, 'workflow_presets_json'),
+    graphViewPresets: safeParseJson<string[]>(row.graph_view_presets_json, row.id, 'graph_view_presets_json'),
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
+    changeSuggestions: safeParseJson<BlueprintChangeSuggestion[]>(row.change_suggestions_json, row.id, 'change_suggestions_json'),
+    supersededBy: row.superseded_by ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToDraft(row: DraftRow): WritingDraft {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    kind: row.kind as DraftKind,
+    chapter: row.chapter,
+    title: row.title ?? undefined,
+    content: row.content,
+    summary: row.summary ?? undefined,
+    status: row.status as DraftStatus,
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
+    linkedProposalViewId: row.linked_proposal_view_id ?? undefined,
+    versionGroupId: row.version_group_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToEntitySketch(row: EntitySketchRow): WritingEntitySketch {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    displayName: row.display_name,
+    typeLabel: row.type_label,
+    summary: row.summary ?? undefined,
+    aliases: safeParseJson<string[]>(row.aliases_json, row.id, 'aliases_json'),
+    tags: safeParseJson<string[]>(row.tags_json, row.id, 'tags_json'),
+    status: row.status as EntitySketchStatus,
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
+    coreEntityId: row.core_entity_id ?? undefined,
+    coreKind: row.core_kind ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToDecision(row: PendingDecisionRow): PendingDecisionItem {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    kind: row.kind as DecisionKind,
+    title: row.title,
+    description: row.description ?? undefined,
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
+    linkedObjectId: row.linked_object_id ?? undefined,
+    linkedObjectType: row.linked_object_type ?? undefined,
+    status: row.status as 'open' | 'resolved' | 'dismissed' | 'expired',
+    resolvedAt: row.resolved_at ?? undefined,
+    resolutionNote: row.resolution_note ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToProposalView(row: ProposalViewRow): WritingProposalView {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    sourceDraftId: row.source_draft_id ?? undefined,
+    sourceEntitySketchId: row.source_entity_sketch_id ?? undefined,
+    proposalType: row.proposal_type as ProposalType,
+    coreProposalId: row.core_proposal_id ?? undefined,
+    coreBridgeResult: safeParseJson<unknown>(row.core_bridge_result_json, row.id, 'core_bridge_result_json'),
+    status: row.status as ProposalViewStatus,
+    humanSummary: row.human_summary ?? undefined,
+    factDiff: safeParseJson<FactDiffEntry[]>(row.fact_diff_json, row.id, 'fact_diff_json'),
+    involvedEntityIds: safeParseJson<string[]>(row.involved_entity_ids_json, row.id, 'involved_entity_ids_json'),
+    ruleWarnings: safeParseJson<RuleWarning[]>(row.rule_warnings_json, row.id, 'rule_warnings_json'),
+    authorDecision: row.author_decision ?? undefined,
+    authorDecisionAt: row.author_decision_at ?? undefined,
+    coreEventId: row.core_event_id ?? undefined,
+    commitError: row.commit_error_json ? safeParseJson<unknown>(row.commit_error_json, row.id, 'commit_error_json') : undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToAuditLog(row: AuditLogRow): WritingAuditLog {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    action: row.action,
+    targetType: row.target_type ?? undefined,
+    targetId: row.target_id ?? undefined,
+    triggerSource: row.trigger_source as AuditTrigger,
+    result: row.result as AuditResult,
+    detail: safeParseJson<unknown>(row.detail_json, row.id, 'detail_json'),
+    errorCode: row.error_code ?? undefined,
+    requestId: row.request_id ?? undefined,
+    sessionId: row.session_id ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToCoreRef(row: CoreRefRow): WritingCoreRef {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    writingObjectType: row.writing_object_type as WritingObjectType,
+    writingObjectId: row.writing_object_id,
+    coreObjectType: row.core_object_type as CoreObjectType,
+    coreObjectId: row.core_object_id,
+    refStatus: row.ref_status as RefStatus,
+    lastVerifiedAt: row.last_verified_at ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToJob(row: JobRow): WritingJob {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    jobType: row.job_type,
+    status: row.status as JobStatus,
+    progress: row.progress,
+    summary: row.summary ?? undefined,
+    inputRefs: safeParseJson<string[]>(row.input_refs_json, row.id, 'input_refs_json'),
+    outputRefs: safeParseJson<string[]>(row.output_refs_json, row.id, 'output_refs_json'),
+    error: row.error_json ? safeParseJson<unknown>(row.error_json, row.id, 'error_json') : undefined,
+    createdBy: row.created_by as 'author' | 'agent' | 'system',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+// =============================================================================
+// SQLiteWritingStore
+// =============================================================================
+
+export class SQLiteWritingStore {
+  private db: Database.Database;
+
+  /**
+   * @param db 共享的 better-sqlite3 Database 实例（与 FactStore / AgentStore 同库）
+   *           调用 createTables() 或在初始化时执行 WRITING_DDL 建表
+   */
+  constructor(db: Database.Database) {
+    this.db = db;
+  }
+
+  /** 执行 DDL 创建所有 writing_* 表（幂等：使用 IF NOT EXISTS） */
+  createTables(): void {
+    this.db.exec(WRITING_DDL);
+  }
+
+  /** 获取底层 Database 实例（供 NarrativeAgent 校验用） */
+  getDatabase(): Database.Database {
+    return this.db;
+  }
+
+  // =========================================================================
+  // writing_projects
+  // =========================================================================
+
+  createProject(title: string, premise?: string): WritingProject {
+    const id = makeId(PREFIX.project);
+    this.db.prepare(
+      'INSERT INTO writing_projects (id, title, premise) VALUES (?, ?, ?)'
+    ).run(id, title, premise ?? null);
+    return this.getProject(id)!;
+  }
+
+  getProject(projectId: string): WritingProject | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_projects WHERE id = ? AND deleted_at IS NULL'
+    ).get(projectId) as ProjectRow | undefined;
+    return row ? rowToProject(row) : undefined;
+  }
+
+  listProjects(): WritingProject[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_projects WHERE deleted_at IS NULL ORDER BY updated_at DESC'
+    ).all() as ProjectRow[];
+    return rows.map(rowToProject);
+  }
+
+  updateProject(projectId: string, updates: {
+    title?: string;
+    premise?: string | null;
+    status?: ProjectStatus;
+    activeBlueprintId?: string | null;
+    currentDraftId?: string | null;
+    workspaceMode?: WorkspaceMode;
+  }): void {
+    const parts: string[] = [];
+    const values: unknown[] = [];
+
+    // 将 camelCase 字段映射到 snake_case 列名
+    const fieldMap: Record<string, string> = {
+      title: 'title',
+      premise: 'premise',
+      status: 'status',
+      activeBlueprintId: 'active_blueprint_id',
+      currentDraftId: 'current_draft_id',
+      workspaceMode: 'workspace_mode',
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        parts.push(`${col} = ?`);
+        values.push(value);
+      }
+    }
+    if (parts.length === 0) return;
+
+    parts.push("updated_at = datetime('now')");
+    values.push(projectId);
+    this.db.prepare(`UPDATE writing_projects SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  /** 级联软删除项目及其所有子表记录（audit_logs 除外） */
+  softDeleteProject(projectId: string): void {
+    const now = "datetime('now')";
+    const childTables = [
+      'writing_author_goals',
+      'writing_idea_cards',
+      'writing_blueprints',
+      'writing_drafts',
+      'writing_entity_sketches',
+      'writing_pending_decisions',
+      'writing_proposal_views',
+      'writing_core_refs',
+      'writing_jobs',
+    ];
+    // 注意：writing_audit_logs 不级联删除，审计记录永久保留
+    // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
+    // 任一子表 UPDATE 失败则整体回滚，避免出现部分子表已删、部分未删的孤儿软删除态
+    const txn = this.db.transaction(() => {
+      for (const table of childTables) {
+        this.db.prepare(
+          `UPDATE ${table} SET deleted_at = ${now}, updated_at = ${now} WHERE project_id = ? AND deleted_at IS NULL`
+        ).run(projectId);
+      }
+      this.db.prepare(
+        `UPDATE writing_projects SET deleted_at = ${now}, updated_at = ${now} WHERE id = ?`
+      ).run(projectId);
+    });
+    txn();
+  }
+
+  // =========================================================================
+  // writing_author_goals
+  // =========================================================================
+
+  createGoal(projectId: string, text: string, kind: GoalKind,
+    priority?: GoalPriority, scope?: GoalScope, sourceRefs?: SourceRef[]): AuthorGoal {
+    const id = makeId(PREFIX.author_goal);
+    this.db.prepare(
+      `INSERT INTO writing_author_goals (id, project_id, text, kind, priority, scope, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, text, kind, priority ?? 'normal', scope ?? 'project', safeStringify(sourceRefs ?? []));
+    return this.getGoal(id)!;
+  }
+
+  getGoal(goalId: string): AuthorGoal | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_author_goals WHERE id = ? AND deleted_at IS NULL'
+    ).get(goalId) as AuthorGoalRow | undefined;
+    return row ? rowToGoal(row) : undefined;
+  }
+
+  listGoals(projectId: string, status?: GoalStatus): AuthorGoal[] {
+    let sql = 'SELECT * FROM writing_author_goals WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (status) {
+      sql += ' AND status = ?';
+      params.push(status);
+    }
+    sql += ' ORDER BY created_at DESC';
+    return (this.db.prepare(sql).all(...params) as AuthorGoalRow[]).map(rowToGoal);
+  }
+
+  updateGoal(goalId: string, updates: {
+    text?: string; kind?: GoalKind; priority?: GoalPriority;
+    scope?: GoalScope; status?: GoalStatus;
+  }): void {
+    const fieldMap: Record<string, string> = { text: 'text', kind: 'kind', priority: 'priority', scope: 'scope', status: 'status' };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        { const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`); parts.push(`${col} = ?`); }
+        values.push(value);
+      }
+    }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    values.push(goalId);
+    this.db.prepare(`UPDATE writing_author_goals SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  // =========================================================================
+  // writing_idea_cards
+  // =========================================================================
+
+  createIdeaCard(projectId: string, params: {
+    content: string;
+    kind?: IdeaKind;
+    tags?: string[];
+    source?: IdeaSource;
+    analysisPolicy?: AnalysisPolicy;
+    sourceRefs?: SourceRef[];
+  }): IdeaCard {
+    const id = makeId(PREFIX.idea_card);
+    this.db.prepare(
+      `INSERT INTO writing_idea_cards (id, project_id, content, kind, tags_json, source, analysis_policy, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, params.content, params.kind ?? 'other',
+      safeStringify(params.tags ?? []), params.source ?? 'manual',
+      params.analysisPolicy ?? 'normal', safeStringify(params.sourceRefs ?? []));
+    return this.getIdeaCard(id)!;
+  }
+
+  getIdeaCard(ideaId: string): IdeaCard | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_idea_cards WHERE id = ? AND deleted_at IS NULL'
+    ).get(ideaId) as IdeaCardRow | undefined;
+    return row ? rowToIdeaCard(row) : undefined;
+  }
+
+  listIdeaCards(projectId: string, filter?: {
+    maturity?: IdeaMaturity; kind?: IdeaKind;
+  }): IdeaCard[] {
+    let sql = 'SELECT * FROM writing_idea_cards WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (filter?.maturity) { sql += ' AND maturity = ?'; params.push(filter.maturity); }
+    if (filter?.kind) { sql += ' AND kind = ?'; params.push(filter.kind); }
+    sql += ' ORDER BY updated_at DESC';
+    return (this.db.prepare(sql).all(...params) as IdeaCardRow[]).map(rowToIdeaCard);
+  }
+
+  updateIdeaCard(ideaId: string, updates: {
+    content?: string; summary?: string | null;
+    kind?: IdeaKind; maturity?: IdeaMaturity;
+    tags?: string[]; analysisPolicy?: AnalysisPolicy;
+    linkedDraftIds?: string[];
+  }): void {
+    const fieldMap: Record<string, string> = {
+      content: 'content', summary: 'summary', kind: 'kind',
+      maturity: 'maturity', tags: 'tags_json',
+      analysisPolicy: 'analysis_policy', linkedDraftIds: 'linked_draft_ids_json',
+    };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        // 数组字段序列化
+        parts.push(`${col} = ?`);
+        values.push(Array.isArray(value) ? safeStringify(value) : value);
+      }
+    }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    values.push(ideaId);
+    this.db.prepare(`UPDATE writing_idea_cards SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  // =========================================================================
+  // writing_blueprints
+  // =========================================================================
+
+  createBlueprint(projectId: string, params?: {
+    entityTypes?: BlueprintTypeDef[];
+    relationTypes?: BlueprintTypeDef[];
+    maturity?: BlueprintMaturity;
+    sourceRefs?: SourceRef[];
+  }): ProjectBlueprint {
+    const id = makeId(PREFIX.blueprint);
+    this.db.prepare(
+      `INSERT INTO writing_blueprints (id, project_id, entity_types_json, relation_types_json, maturity, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, safeStringify(params?.entityTypes ?? []),
+      safeStringify(params?.relationTypes ?? []),
+      params?.maturity ?? 'drafted', safeStringify(params?.sourceRefs ?? []));
+    return this.getBlueprint(id)!;
+  }
+
+  getBlueprint(blueprintId: string): ProjectBlueprint | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_blueprints WHERE id = ? AND deleted_at IS NULL'
+    ).get(blueprintId) as BlueprintRow | undefined;
+    return row ? rowToBlueprint(row) : undefined;
+  }
+
+  getActiveBlueprint(projectId: string): ProjectBlueprint | undefined {
+    const row = this.db.prepare(
+      `SELECT * FROM writing_blueprints
+       WHERE project_id = ? AND maturity IN ('active','evolving') AND deleted_at IS NULL
+       ORDER BY version DESC LIMIT 1`
+    ).get(projectId) as BlueprintRow | undefined;
+    return row ? rowToBlueprint(row) : undefined;
+  }
+
+  listBlueprints(projectId: string): ProjectBlueprint[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_blueprints WHERE project_id = ? AND deleted_at IS NULL ORDER BY version DESC'
+    ).all(projectId) as BlueprintRow[];
+    return rows.map(rowToBlueprint);
+  }
+
+  updateBlueprint(blueprintId: string, updates: {
+    maturity?: BlueprintMaturity;
+    entityTypes?: BlueprintTypeDef[];
+    relationTypes?: BlueprintTypeDef[];
+    changeSuggestions?: BlueprintChangeSuggestion[];
+    supersededBy?: string | null;
+  }): void {
+    const fieldMap: Record<string, string> = {
+      maturity: 'maturity', entityTypes: 'entity_types_json',
+      relationTypes: 'relation_types_json',
+      changeSuggestions: 'change_suggestions_json',
+      supersededBy: 'superseded_by',
+    };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        parts.push(`${col} = ?`);
+        values.push(Array.isArray(value) ? safeStringify(value) : value);
+      }
+    }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    values.push(blueprintId);
+    this.db.prepare(`UPDATE writing_blueprints SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  supersedeBlueprint(blueprintId: string, newBlueprintId: string): void {
+    this.db.prepare(
+      "UPDATE writing_blueprints SET maturity = 'superseded', superseded_by = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(newBlueprintId, blueprintId);
+  }
+
+  // =========================================================================
+  // writing_drafts
+  // =========================================================================
+
+  createDraft(projectId: string, params: {
+    kind: DraftKind;
+    chapter?: number;
+    title?: string;
+    content?: string;
+    sourceRefs?: SourceRef[];
+  }): WritingDraft {
+    const id = makeId(PREFIX.draft);
+    this.db.prepare(
+      `INSERT INTO writing_drafts (id, project_id, kind, chapter, title, content, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, params.kind, params.chapter ?? 1, params.title ?? null,
+      params.content ?? '', safeStringify(params.sourceRefs ?? []));
+    return this.getDraft(id)!;
+  }
+
+  getDraft(draftId: string): WritingDraft | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_drafts WHERE id = ? AND deleted_at IS NULL'
+    ).get(draftId) as DraftRow | undefined;
+    return row ? rowToDraft(row) : undefined;
+  }
+
+  listDrafts(projectId: string, filter?: {
+    status?: DraftStatus; kind?: DraftKind;
+  }): WritingDraft[] {
+    let sql = 'SELECT * FROM writing_drafts WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (filter?.status) { sql += ' AND status = ?'; params.push(filter.status); }
+    if (filter?.kind) { sql += ' AND kind = ?'; params.push(filter.kind); }
+    sql += ' ORDER BY updated_at DESC';
+    return (this.db.prepare(sql).all(...params) as DraftRow[]).map(rowToDraft);
+  }
+
+  updateDraft(draftId: string, updates: {
+    content?: string; summary?: string | null; title?: string | null;
+    chapter?: number; status?: DraftStatus; linkedProposalViewId?: string | null;
+  }): void {
+    const fieldMap: Record<string, string> = {
+      content: 'content', summary: 'summary', title: 'title',
+      chapter: 'chapter', status: 'status', linkedProposalViewId: 'linked_proposal_view_id',
+    };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        { const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`); parts.push(`${col} = ?`); }
+        values.push(value);
+      }
+    }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    values.push(draftId);
+    this.db.prepare(`UPDATE writing_drafts SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  // =========================================================================
+  // writing_entity_sketches
+  // =========================================================================
+
+  createEntitySketch(projectId: string, params: {
+    displayName: string;
+    typeLabel?: string;
+    status?: EntitySketchStatus;
+    sourceRefs?: SourceRef[];
+  }): WritingEntitySketch {
+    const id = makeId(PREFIX.entity_sketch);
+    this.db.prepare(
+      `INSERT INTO writing_entity_sketches (id, project_id, display_name, type_label, status, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, params.displayName, params.typeLabel ?? 'unknown',
+      params.status ?? 'hint', safeStringify(params.sourceRefs ?? []));
+    return this.getEntitySketch(id)!;
+  }
+
+  getEntitySketch(sketchId: string): WritingEntitySketch | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_entity_sketches WHERE id = ? AND deleted_at IS NULL'
+    ).get(sketchId) as EntitySketchRow | undefined;
+    return row ? rowToEntitySketch(row) : undefined;
+  }
+
+  listEntitySketches(projectId: string, filter?: {
+    status?: EntitySketchStatus; typeLabel?: string;
+  }): WritingEntitySketch[] {
+    let sql = 'SELECT * FROM writing_entity_sketches WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (filter?.status) { sql += ' AND status = ?'; params.push(filter.status); }
+    if (filter?.typeLabel) { sql += ' AND type_label = ?'; params.push(filter.typeLabel); }
+    sql += ' ORDER BY updated_at DESC';
+    return (this.db.prepare(sql).all(...params) as EntitySketchRow[]).map(rowToEntitySketch);
+  }
+
+  /** 按名称查找候选实体（合并检测用） */
+  findEntitySketchesByName(projectId: string, displayName: string): WritingEntitySketch[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM writing_entity_sketches
+       WHERE project_id = ? AND display_name = ? AND deleted_at IS NULL
+       AND status NOT IN ('deprecated','merged')
+       ORDER BY updated_at DESC`
+    ).all(projectId, displayName) as EntitySketchRow[];
+    return rows.map(rowToEntitySketch);
+  }
+
+  updateEntitySketch(sketchId: string, updates: {
+    displayName?: string; typeLabel?: string;
+    summary?: string | null; status?: EntitySketchStatus;
+    coreEntityId?: string | null; coreKind?: string | null;
+    aliases?: string[]; tags?: string[];
+  }): void {
+    const fieldMap: Record<string, string> = {
+      displayName: 'display_name', typeLabel: 'type_label',
+      summary: 'summary', status: 'status',
+      coreEntityId: 'core_entity_id', coreKind: 'core_kind',
+      aliases: 'aliases_json', tags: 'tags_json',
+    };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        parts.push(`${col} = ?`);
+        values.push(Array.isArray(value) ? safeStringify(value) : value);
+      }
+    }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    values.push(sketchId);
+    this.db.prepare(`UPDATE writing_entity_sketches SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  /** 合并实体：source 标记为 merged */
+  mergeEntitySketches(sourceId: string, targetId: string): void {
+    // 合并时将 source 标为 merged
+    this.db.prepare(
+      "UPDATE writing_entity_sketches SET status = 'merged', updated_at = datetime('now') WHERE id = ?"
+    ).run(sourceId);
+  }
+
+  // =========================================================================
+  // writing_pending_decisions
+  // =========================================================================
+
+  createDecision(projectId: string, params: {
+    kind: DecisionKind;
+    title: string;
+    description?: string;
+    linkedObjectId?: string;
+    linkedObjectType?: string;
+    sourceRefs?: SourceRef[];
+  }): PendingDecisionItem {
+    const id = makeId(PREFIX.pending_decision);
+    this.db.prepare(
+      `INSERT INTO writing_pending_decisions (id, project_id, kind, title, description, linked_object_id, linked_object_type, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, params.kind, params.title, params.description ?? null,
+      params.linkedObjectId ?? null, params.linkedObjectType ?? null,
+      safeStringify(params.sourceRefs ?? []));
+    return this.getDecision(id)!;
+  }
+
+  getDecision(decisionId: string): PendingDecisionItem | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_pending_decisions WHERE id = ? AND deleted_at IS NULL'
+    ).get(decisionId) as PendingDecisionRow | undefined;
+    return row ? rowToDecision(row) : undefined;
+  }
+
+  listPendingDecisions(projectId: string): PendingDecisionItem[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM writing_pending_decisions
+       WHERE project_id = ? AND status = 'open' AND deleted_at IS NULL
+       ORDER BY created_at ASC`
+    ).all(projectId) as PendingDecisionRow[];
+    return rows.map(rowToDecision);
+  }
+
+  resolveDecision(decisionId: string, status: 'resolved' | 'dismissed' | 'expired', resolutionNote?: string): void {
+    // 乐观锁：仅在 status='open' 时更新，防止并发重复处理
+    const result = this.db.prepare(
+      `UPDATE writing_pending_decisions
+       SET status = ?, resolved_at = datetime('now'), resolution_note = ?, updated_at = datetime('now')
+       WHERE id = ? AND status = 'open'`
+    ).run(status, resolutionNote ?? null, decisionId);
+    if (result.changes === 0) {
+      throw new Error(`writing-store: Decision ${decisionId} 不是 open 状态（已被并发处理或已过期）`);
+    }
+  }
+
+  // =========================================================================
+  // writing_proposal_views
+  // =========================================================================
+
+  createProposalView(projectId: string, params: {
+    proposalType: ProposalType;
+    sourceDraftId?: string;
+    sourceEntitySketchId?: string;
+  }): WritingProposalView {
+    const id = makeId(PREFIX.proposal_view);
+    this.db.prepare(
+      `INSERT INTO writing_proposal_views (id, project_id, proposal_type, source_draft_id, source_entity_sketch_id)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(id, projectId, params.proposalType,
+      params.sourceDraftId ?? null, params.sourceEntitySketchId ?? null);
+    return this.getProposalView(id)!;
+  }
+
+  getProposalView(viewId: string): WritingProposalView | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_proposal_views WHERE id = ? AND deleted_at IS NULL'
+    ).get(viewId) as ProposalViewRow | undefined;
+    return row ? rowToProposalView(row) : undefined;
+  }
+
+  listProposalViews(projectId: string, filter?: {
+    status?: ProposalViewStatus;
+  }): WritingProposalView[] {
+    let sql = 'SELECT * FROM writing_proposal_views WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (filter?.status) { sql += ' AND status = ?'; params.push(filter.status); }
+    sql += ' ORDER BY updated_at DESC';
+    return (this.db.prepare(sql).all(...params) as ProposalViewRow[]).map(rowToProposalView);
+  }
+
+  updateProposalView(viewId: string, updates: {
+    coreProposalId?: string | null; coreBridgeResult?: unknown;
+    status?: ProposalViewStatus; humanSummary?: string | null;
+    factDiff?: FactDiffEntry[]; involvedEntityIds?: string[];
+    ruleWarnings?: RuleWarning[]; authorDecision?: string | null;
+    coreEventId?: string | null; commitError?: unknown | null;
+  }): void {
+    const fieldMap: Record<string, string> = {
+      coreProposalId: 'core_proposal_id', coreBridgeResult: 'core_bridge_result_json',
+      status: 'status', humanSummary: 'human_summary',
+      factDiff: 'fact_diff_json', involvedEntityIds: 'involved_entity_ids_json',
+      ruleWarnings: 'rule_warnings_json', authorDecision: 'author_decision',
+      coreEventId: 'core_event_id', commitError: 'commit_error_json',
+    };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        // P1-2 修复：未知字段直接报错（杜绝列名注入面），不再回退到原始 key
+        const col = fieldMap[key];
+        if (!col) throw new Error(`updateProposalView 未知更新字段: ${String(key)}`);
+        parts.push(`${col} = ?`);
+        // P1-2 修复：null 直接存 SQL NULL，对象/数组才序列化（避免 null → 字符串 "null"）
+        values.push(value === null ? null
+          : (Array.isArray(value) || typeof value === 'object') ? safeStringify(value) : value);
+      }
+    }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    values.push(viewId);
+    this.db.prepare(`UPDATE writing_proposal_views SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  /** 来源草案修改导致审核过期 */
+  expireProposalView(viewId: string): void {
+    this.db.prepare(
+      "UPDATE writing_proposal_views SET status = 'expired', updated_at = datetime('now') WHERE id = ?"
+    ).run(viewId);
+  }
+
+  /** 找到某草案关联的活跃审核视图 */
+  getActiveProposalViewForDraft(draftId: string): WritingProposalView | undefined {
+    const row = this.db.prepare(
+      `SELECT * FROM writing_proposal_views
+       WHERE source_draft_id = ? AND status IN ('open','author_approved') AND deleted_at IS NULL
+       ORDER BY created_at DESC LIMIT 1`
+    ).get(draftId) as ProposalViewRow | undefined;
+    return row ? rowToProposalView(row) : undefined;
+  }
+
+  // =========================================================================
+  // writing_audit_logs
+  // =========================================================================
+
+  recordAudit(params: {
+    projectId: string; action: string;
+    targetType?: string; targetId?: string;
+    triggerSource?: AuditTrigger; result?: AuditResult;
+    detail?: unknown; errorCode?: string;
+    requestId?: string; sessionId?: string;
+  }): WritingAuditLog {
+    const id = makeId(PREFIX.audit_log);
+    this.db.prepare(
+      `INSERT INTO writing_audit_logs (id, project_id, action, target_type, target_id, trigger_source, result, detail_json, error_code, request_id, session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, params.projectId, params.action, params.targetType ?? null, params.targetId ?? null,
+      params.triggerSource ?? 'author_action', params.result ?? 'success',
+      safeStringify(params.detail ?? {}), params.errorCode ?? null,
+      params.requestId ?? null, params.sessionId ?? null);
+    return this.getAuditLog(id)!;
+  }
+
+  getAuditLog(logId: string): WritingAuditLog | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_audit_logs WHERE id = ?'
+    ).get(logId) as AuditLogRow | undefined;
+    return row ? rowToAuditLog(row) : undefined;
+  }
+
+  queryAuditLogs(projectId: string, filter?: {
+    action?: string; targetType?: string; targetId?: string; limit?: number;
+  }): WritingAuditLog[] {
+    let sql = 'SELECT * FROM writing_audit_logs WHERE project_id = ?';
+    const params: unknown[] = [projectId];
+    if (filter?.action) { sql += ' AND action = ?'; params.push(filter.action); }
+    if (filter?.targetType) { sql += ' AND target_type = ?'; params.push(filter.targetType); }
+    if (filter?.targetId) { sql += ' AND target_id = ?'; params.push(filter.targetId); }
+    sql += ' ORDER BY created_at DESC';
+    if (filter?.limit) { sql += ' LIMIT ?'; params.push(filter.limit); }
+    return (this.db.prepare(sql).all(...params) as AuditLogRow[]).map(rowToAuditLog);
+  }
+
+  // =========================================================================
+  // writing_core_refs
+  // =========================================================================
+
+  createCoreRef(projectId: string, params: {
+    writingObjectType: WritingObjectType; writingObjectId: string;
+    coreObjectType: CoreObjectType; coreObjectId: string;
+  }): WritingCoreRef {
+    // P1-2 修复：先查是否已存在相同引用，存在则仅刷新 ref_status（保留原 id/created_at）。
+    // INSERT OR REPLACE 会删旧行重建，丢失历史 created_at 且使外部持有的 coreRefId 失效。
+    const existing = this.db.prepare(
+      `SELECT id FROM writing_core_refs
+       WHERE writing_object_type = ? AND writing_object_id = ? AND core_object_type = ? AND core_object_id = ? AND deleted_at IS NULL`
+    ).get(params.writingObjectType, params.writingObjectId,
+      params.coreObjectType, params.coreObjectId) as { id: string } | undefined;
+
+    if (existing) {
+      this.db.prepare(
+        `UPDATE writing_core_refs SET ref_status = 'active', updated_at = datetime('now') WHERE id = ?`
+      ).run(existing.id);
+      return this.getCoreRef(existing.id)!;
+    }
+
+    const id = makeId(PREFIX.core_ref);
+    this.db.prepare(
+      `INSERT INTO writing_core_refs (id, project_id, writing_object_type, writing_object_id, core_object_type, core_object_id, ref_status)
+       VALUES (?, ?, ?, ?, ?, ?, 'active')`
+    ).run(id, projectId, params.writingObjectType, params.writingObjectId,
+      params.coreObjectType, params.coreObjectId);
+    return this.getCoreRef(id)!;
+  }
+
+  getCoreRef(refId: string): WritingCoreRef | undefined {
+    // P1-2 修复：过滤已软删除（级联 archive 后不应再查出）
+    const row = this.db.prepare(
+      'SELECT * FROM writing_core_refs WHERE id = ? AND deleted_at IS NULL'
+    ).get(refId) as CoreRefRow | undefined;
+    return row ? rowToCoreRef(row) : undefined;
+  }
+
+  getCoreRefsByWritingObject(writingObjectType: string, writingObjectId: string): WritingCoreRef[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_core_refs WHERE writing_object_type = ? AND writing_object_id = ? AND ref_status = ? AND deleted_at IS NULL'
+    ).all(writingObjectType, writingObjectId, 'active') as CoreRefRow[];
+    return rows.map(rowToCoreRef);
+  }
+
+  getCoreRefsByCoreObject(coreObjectType: string, coreObjectId: string): WritingCoreRef[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_core_refs WHERE core_object_type = ? AND core_object_id = ? AND deleted_at IS NULL'
+    ).all(coreObjectType, coreObjectId) as CoreRefRow[];
+    return rows.map(rowToCoreRef);
+  }
+
+  markCoreRefStale(coreRefId: string): void {
+    this.db.prepare(
+      "UPDATE writing_core_refs SET ref_status = 'stale', last_verified_at = datetime('now') WHERE id = ?"
+    ).run(coreRefId);
+  }
+
+  markCoreRefBroken(coreRefId: string): void {
+    this.db.prepare(
+      "UPDATE writing_core_refs SET ref_status = 'broken', last_verified_at = datetime('now') WHERE id = ?"
+    ).run(coreRefId);
+  }
+
+  // =========================================================================
+  // writing_jobs（Phase 7 最小实现——只支持创建和状态查询）
+  // =========================================================================
+
+  createJob(projectId: string, jobType: string, createdBy?: JobCreator): WritingJob {
+    const id = makeId(PREFIX.job);
+    this.db.prepare(
+      `INSERT INTO writing_jobs (id, project_id, job_type, created_by) VALUES (?, ?, ?, ?)`
+    ).run(id, projectId, jobType, createdBy ?? 'system');
+    return this.getJob(id)!;
+  }
+
+  getJob(jobId: string): WritingJob | undefined {
+    // P1-2 修复：过滤已软删除
+    const row = this.db.prepare(
+      'SELECT * FROM writing_jobs WHERE id = ? AND deleted_at IS NULL'
+    ).get(jobId) as JobRow | undefined;
+    return row ? rowToJob(row) : undefined;
+  }
+
+  listJobs(projectId: string, filter?: { status?: JobStatus }): WritingJob[] {
+    // P1-2 修复：过滤已软删除
+    let sql = 'SELECT * FROM writing_jobs WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (filter?.status) { sql += ' AND status = ?'; params.push(filter.status); }
+    sql += ' ORDER BY created_at DESC';
+    return (this.db.prepare(sql).all(...params) as JobRow[]).map(rowToJob);
+  }
+
+  updateJobStatus(jobId: string, status: JobStatus, progress?: number): void {
+    const parts = ["status = ?", "updated_at = datetime('now')"];
+    const values: unknown[] = [status];
+    if (progress !== undefined) { parts.push('progress = ?'); values.push(progress); }
+    values.push(jobId);
+    this.db.prepare(`UPDATE writing_jobs SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+}
