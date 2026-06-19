@@ -70,10 +70,14 @@ const subjectAutoPropagation: PropagationRule = {
   id: 'propagation_subject_auto',
   description: '事件主体自动获得事件产生的所有 Fact 的知识（self_action, confidence=1.0）',
 
-  propagate(event: NarrativeEvent, factGroup: FactGroup): ProposedKnowledge[] {
+  propagate(event: NarrativeEvent, factGroup: FactGroup, factStore: FactStore): ProposedKnowledge[] {
     const results: ProposedKnowledge[] = [];
     const subject = event.params['subject'] as string | undefined;
     if (!subject) return results;
+
+    // 引用完整性校验：事件主体必须已注册（与 witness_propagation 对称）。
+    // 若未注册，跳过传播——避免 knowledge 行 entity_id 违反外键约束导致 commit 回滚。
+    if (!factStore.entityExists(subject)) return results;
 
     for (const change of factGroup.changes) {
       // 只对 assert/update 操作传播知识（retract 不产生新知识）
@@ -129,6 +133,11 @@ const witnessPropagation: PropagationRule = {
       if (locFact.subject === subject) continue;
       // 检查是否在同一位置（EntityRef 结构比较，不用 JSON.stringify）
       if (isSameValue(locFact.value, subjectLocation)) {
+        // 引用完整性校验：witness 必须已在 entities 表注册。
+        // 若 location fact 的 subject 未注册（种子数据/直接 INSERT），跳过——
+        // 否则产生的 knowledge 行 entity_id 违反外键约束，导致整个 commit_event 事务回滚
+        // （FOREIGN KEY failed，此前纯 service 路径 register+simulate+commit 总失败的根因）。
+        if (!factStore.entityExists(locFact.subject)) continue;
         // 确认实体具有认知能力（entity/place/spatial_domain 等）
         // Phase 1 简化：所有同位置实体都可能目击
         // Phase 2 完善：检查 EntityKind 排除 information/foreshadowing/time 等
@@ -479,8 +488,10 @@ export class RuleEngine {
       try {
         const ruleResults = rule.propagate(event, factGroup, factStore);
         results.push(...ruleResults);
-      } catch {
-        // 单条规则失败不影响其他规则继续执行
+      } catch (err) {
+        // 单条规则失败不影响其他规则继续执行，但记录日志（此前静默吞掉，proposedKnowledge
+        // 少几条作者无从知晓）。不抛错以保持隔离性。
+        console.warn(`[RuleEngine] 传播规则 ${rule.id} 执行失败：${err instanceof Error ? err.message : err}`);
         continue;
       }
     }

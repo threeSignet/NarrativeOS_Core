@@ -6689,7 +6689,7 @@ Narrative-OS-Core 的 10 个工具以 OpenAI/DeepSeek 兼容的 Tool Definition 
 
 ```json
 {
-  "model": "deepseek-chat",
+  "model": "",
   "messages": [
     {
       "role": "system",

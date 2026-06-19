@@ -29,6 +29,7 @@ import type {
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { validateIdeaTransition } from '../models/state-machine.js';
+import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
 
 export class IdeaService {
   private store: SQLiteWritingStore;
@@ -77,7 +78,7 @@ export class IdeaService {
     },
   ): IdeaCard {
     if (!params.content || params.content.trim().length === 0) {
-      throw new Error('灵感内容不能为空');
+      throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, '灵感内容不能为空', { field: 'content' });
     }
 
     const idea = this.store.createIdeaCard(ctx.projectId, {
@@ -115,7 +116,7 @@ export class IdeaService {
     },
   ): IdeaCard {
     const idea = this.store.getIdeaCard(ideaId);
-    if (!idea) throw new Error(`找不到灵感: ${ideaId}`);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
 
     const newMaturity: IdeaMaturity =
       idea.maturity === 'raw' ? 'candidate' : idea.maturity;
@@ -157,7 +158,7 @@ export class IdeaService {
     },
   ): { idea: IdeaCard; draft: WritingDraft } {
     const idea = this.store.getIdeaCard(ideaId);
-    if (!idea) throw new Error(`找不到灵感: ${ideaId}`);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
 
     // 调用 DraftService 创建草案（通过注入的函数）
     if (!this.createDraftFn) {
@@ -204,7 +205,7 @@ export class IdeaService {
     params: { typeLabel: string; description?: string; kind?: string },
   ): BlueprintChangeSuggestion {
     const idea = this.store.getIdeaCard(ideaId);
-    if (!idea) throw new Error(`找不到灵感: ${ideaId}`);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
 
     // 获取或创建活跃蓝图
     let blueprint = this.store.getActiveBlueprint(ctx.projectId);
@@ -228,7 +229,7 @@ export class IdeaService {
     };
 
     const existingSuggestions = blueprint.changeSuggestions ?? [];
-    this.store.updateBlueprint(blueprint.id, {
+    this.store.updateBlueprint(blueprint.id, blueprint.version, {
       changeSuggestions: [...existingSuggestions, suggestion],
       maturity: blueprint.maturity === 'active' ? 'evolving' : blueprint.maturity,
     });
@@ -245,10 +246,12 @@ export class IdeaService {
 
   /**
    * 废弃灵感
+   *
+   * Agent 可调用：是（LOW_RISK_WRITE — §8.3.2，与 captureIdea/classifyIdea 同级）
    */
   discardIdea(ctx: WritingRequestContext, ideaId: string): void {
     const idea = this.store.getIdeaCard(ideaId);
-    if (!idea) throw new Error(`找不到灵感: ${ideaId}`);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
 
     this.store.updateIdeaCard(ideaId, { maturity: 'archived' });
 
@@ -261,14 +264,16 @@ export class IdeaService {
 
   /**
    * 恢复废弃灵感
+   *
+   * Agent 可调用：是（LOW_RISK_WRITE — §8.3.2）
    */
   restoreIdea(ctx: WritingRequestContext, ideaId: string): IdeaCard {
     const idea = this.store.getIdeaCard(ideaId);
     // 注意：getIdeaCard 默认过滤 deleted_at，但 archived 的仍然可见
     // 如果 idea 被软删除（deleted_at 非空），则无法获取
-    if (!idea) throw new Error(`找不到灵感: ${ideaId}`);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
     if (idea.maturity !== 'archived') {
-      throw new Error('只能恢复已归档的灵感');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '只能恢复已归档的灵感', { currentStatus: idea.maturity, attemptedAction: 'restore' });
     }
 
     this.store.updateIdeaCard(ideaId, { maturity: 'raw' });
@@ -301,7 +306,7 @@ export class IdeaService {
    */
   getIdeaDetail(ctx: WritingRequestContext, ideaId: string): IdeaCard {
     const idea = this.store.getIdeaCard(ideaId);
-    if (!idea) throw new Error(`找不到灵感: ${ideaId}`);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
     return idea;
   }
 }

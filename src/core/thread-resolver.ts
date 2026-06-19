@@ -64,6 +64,7 @@ const RETROACTIVE_TRANSITIONS: Record<ThreadStatus, ThreadStatus[]> = {
  * HINTED   → HINTED    （多次暗示，追加 Milestone）
  * HINTED   → RESOLVED  （回收）
  * PARTIALLY_REVEALED → RESOLVED
+ * RESOLVED → PLANTED   （Retcon 恢复：回收事件被 Retcon 撤回，线索回到埋种态）
  * 任意     → ABANDONED （作者放弃）
  * 任意     → OBSOLETE  （上游依赖断裂）
  */
@@ -73,7 +74,7 @@ const PROGRESSIVE_TRANSITIONS: Record<ThreadStatus, ThreadStatus[]> = {
   PLANTED: ['HINTED', 'RESOLVED', 'ABANDONED', 'OBSOLETE'],
   HINTED: ['HINTED', 'RESOLVED', 'ABANDONED', 'OBSOLETE'],
   PARTIALLY_REVEALED: ['RESOLVED', 'ABANDONED', 'OBSOLETE'],
-  RESOLVED: [],
+  RESOLVED: ['PLANTED'], // Retcon 恢复（retcon-engine.ts:620 的 updateStatus 合法化）
   ABANDONED: [],
   OBSOLETE: [],
 };

@@ -8,7 +8,11 @@
 import { describe, it, expect } from 'vitest';
 import { SiliconFlowEmbeddingService } from '../../src/adapters/embedding/siliconflow-embedder.js';
 
-describe('SiliconFlowEmbeddingService', () => {
+// 守卫：无 EMBEDDING_API_KEY 时 skip 而非 fail（对齐 narrative-agent.test.ts 范式）
+const HAS_KEY = !!process.env['EMBEDDING_API_KEY'];
+const describeIf = HAS_KEY ? describe : describe.skip;
+
+describeIf('SiliconFlowEmbeddingService', () => {
   const service = new SiliconFlowEmbeddingService();
 
   it('单条文本向量化应返回 1024 维向量', async () => {

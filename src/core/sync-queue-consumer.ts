@@ -37,6 +37,13 @@ interface SyncQueueRow {
   last_error: string | null;
 }
 
+/**
+ * processing 孤儿行回收阈值（秒）。
+ * consumer 抢占行后若在此时间内未完成（进程崩溃），下次 processPending 会重置为 pending。
+ * 5 分钟覆盖单批最长处理时间（embed API 调用 + LanceDB 写）并留余量。
+ */
+const STALE_PROCESSING_SECONDS = 300;
+
 // ---------------------------------------------------------------------------
 // SyncQueueConsumer
 // ---------------------------------------------------------------------------
@@ -66,6 +73,19 @@ export class SyncQueueConsumer {
    * @returns 处理结果统计
    */
   async processPending(): Promise<{ processed: number; failed: number }> {
+    // 孤儿行回收（reaper）：consumer 崩溃后行会永久停留 'processing'（后续 SELECT 只抓 pending），
+    // 导致对应 Fact 向量永久缺失。此处把超过 STALE_PROCESSING_SECONDS 仍 processing 的行重置为 pending。
+    // 幂等：重置后会被下方抢占逻辑重新处理（LanceDB add 是 upsert 语义，重复处理不破坏一致性）。
+    const reaped = this.db.prepare(`
+      UPDATE sync_queue
+      SET status = 'pending', next_retry_at = datetime('now')
+      WHERE status = 'processing'
+        AND next_retry_at < datetime('now', '-${STALE_PROCESSING_SECONDS} seconds')
+    `).run().changes;
+    if (reaped > 0) {
+      console.warn(`[SyncQueue] 回收 ${reaped} 个停滞的 processing 孤儿行（疑似 consumer 崩溃）`);
+    }
+
     // P1 修复：原子抢占 pending → processing，防止并发 consumer 重复处理同一批条目
     // （多 worker 场景下，两个 processPending 可能 SELECT 到相同 pending 行，各自处理一遍，
     // 导致 LanceDB 重复写入向量）。RETURNING 子句需 SQLite 3.35+（better-sqlite3 内置版本满足）。

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { SQLiteWritingStore } from '../../src/writing/repositories/writing-store.js';
+import { WritingError, WritingErrorCode } from '../../src/writing/errors/error-codes.js';
 
 describe('WritingStore 建表验证', () => {
   let db: Database.Database;
@@ -25,7 +26,7 @@ describe('WritingStore 建表验证', () => {
   // 建表验证 — 确认 11 张表全部创建
   // =============================================================================
 
-  it('11 张表全部创建成功', () => {
+  it('13 张表全部创建成功', () => {
     const tables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'writing_%' ORDER BY name"
     ).all() as Array<{ name: string }>;
@@ -42,7 +43,10 @@ describe('WritingStore 建表验证', () => {
     expect(names).toContain('writing_audit_logs');
     expect(names).toContain('writing_core_refs');
     expect(names).toContain('writing_jobs');
-    expect(tables.length).toBe(11);
+    // W12 §3.1：工作台布局 + 项目级偏好容器（与项目 1:1）
+    expect(names).toContain('writing_workspace_layouts');
+    expect(names).toContain('writing_project_preferences');
+    expect(tables.length).toBe(13);
   });
 
   // =============================================================================
@@ -137,7 +141,7 @@ describe('WritingStore 建表验证', () => {
     expect(bp.entityTypes.length).toBe(1);
 
     // 查询活跃蓝图
-    store.updateBlueprint(bp.id, { maturity: 'active' });
+    store.updateBlueprint(bp.id, bp.version, { maturity: 'active' });
     const active = store.getActiveBlueprint(project.id);
     expect(active).toBeDefined();
   });
@@ -163,18 +167,20 @@ describe('WritingStore 建表验证', () => {
   it('草案状态流转', () => {
     const project = store.createProject('测试');
     const draft = store.createDraft(project.id, { kind: 'event', content: '测试内容' });
+    expect(draft.version).toBe(1); // W3：乐观锁版本号初始为 1
 
-    // drafting → ready_to_simulate
-    store.updateDraft(draft.id, { status: 'ready_to_simulate' });
+    // drafting → ready_to_simulate（用返回的新版本号串联，避免下一次写入版本过期）
+    let v = store.updateDraft(draft.id, draft.version, { status: 'ready_to_simulate' }).newVersion;
     expect(store.getDraft(draft.id)!.status).toBe('ready_to_simulate');
 
     // ready_to_simulate → simulated
-    store.updateDraft(draft.id, { status: 'simulated' });
+    v = store.updateDraft(draft.id, v, { status: 'simulated' }).newVersion;
     expect(store.getDraft(draft.id)!.status).toBe('simulated');
 
     // simulated → committed（审核生命周期由 ProposalView.status 管理）
-    store.updateDraft(draft.id, { status: 'committed' });
+    store.updateDraft(draft.id, v, { status: 'committed' });
     expect(store.getDraft(draft.id)!.status).toBe('committed');
+    expect(store.getDraft(draft.id)!.version).toBe(4); // 三次更新：1→2→3→4
   });
 
   // =============================================================================
@@ -377,7 +383,7 @@ describe('WritingStore 建表验证', () => {
         { id: 'type_char', label: '角色', status: 'accepted', aliases: [], examples: [], sourceRefs: [] },
       ],
     });
-    store.updateBlueprint(bp.id, { maturity: 'active' });
+    store.updateBlueprint(bp.id, bp.version, { maturity: 'active' });
 
     // 4. 创建草案
     const draft = store.createDraft(project.id, {
@@ -385,7 +391,7 @@ describe('WritingStore 建表验证', () => {
       title: '第一幕：发现黑晶碎片',
       content: '长庚站的扶梯早就停了...',
     });
-    store.updateDraft(draft.id, { status: 'simulated' });
+    store.updateDraft(draft.id, draft.version, { status: 'simulated' });
 
     // 5. 候选实体
     const shenmo = store.createEntitySketch(project.id, {
@@ -413,7 +419,8 @@ describe('WritingStore 建表验证', () => {
       status: 'committed',
       coreEventId: 'evt_test',
     });
-    store.updateDraft(draft.id, { status: 'committed' });
+    // 草案在步骤4已更新过一次（version 1→2），此处须用最新版本号
+    store.updateDraft(draft.id, store.getDraft(draft.id)!.version, { status: 'committed' });
 
     // 9. Core 引用
     store.createCoreRef(project.id, {
@@ -439,5 +446,106 @@ describe('WritingStore 建表验证', () => {
     const commitLog = auditLogs.find(l => l.action === 'commit_proposal');
     expect(commitLog).toBeDefined();
     expect(commitLog!.result).toBe('success');
+  });
+});
+
+// =============================================================================
+// W14：sourceRefs 持久化（ProposalView + AuditLog）+ resolveDecision 结构化错误码
+// =============================================================================
+// 验证三件事：
+//   1. createProposalView 的 sourceRefs 经 source_refs_json 列往返保持（§4 SourceRef / §30.1 数据模型对齐）
+//   2. recordAudit 的 sourceRefs 同上（审计来源追溯——"本次动作由哪个草案/灵感触发"）
+//   3. resolveDecision 对非 open 状态抛 WritingError(INVALID_STATUS_TRANSITION)，而非裸 Error
+//      （W14：激活"无 throw 点的裸 Error → 结构化错误码"路径，调用方可按码分流恢复动作）
+// =============================================================================
+
+describe('W14 · sourceRefs 持久化 + resolveDecision 错误码', () => {
+  let db: Database.Database;
+  let store: SQLiteWritingStore;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    store = new SQLiteWritingStore(db);
+    store.createTables();
+  });
+
+  it('createProposalView 持久化 sourceRefs（传入/不传入往返）', () => {
+    const project = store.createProject('测试');
+    const draft = store.createDraft(project.id, { kind: 'event', content: 'c' });
+
+    // 传入多源 sourceRefs → 经 source_refs_json 列原样读回
+    const pv = store.createProposalView(project.id, {
+      proposalType: 'event',
+      sourceDraftId: draft.id,
+      sourceRefs: [
+        { kind: 'draft', id: draft.id },
+        { kind: 'idea', id: 'wid_upstream' },
+      ],
+    });
+    expect(pv.sourceRefs).toEqual([
+      { kind: 'draft', id: draft.id },
+      { kind: 'idea', id: 'wid_upstream' },
+    ]);
+    // 重新查询（走 rowToProposalView 映射）仍保持
+    const reloaded = store.getProposalView(pv.id)!;
+    expect(reloaded.sourceRefs).toEqual([
+      { kind: 'draft', id: draft.id },
+      { kind: 'idea', id: 'wid_upstream' },
+    ]);
+
+    // 不传 sourceRefs → 默认空数组（既有调用方零改不破）
+    const pvEmpty = store.createProposalView(project.id, { proposalType: 'event' });
+    expect(pvEmpty.sourceRefs).toEqual([]);
+  });
+
+  it('recordAudit 持久化 sourceRefs（传入/不传入往返）', () => {
+    const project = store.createProject('测试');
+
+    // 传入 sourceRefs（本次提交由某草案触发）→ 经 source_refs_json 列原样读回
+    const log = store.recordAudit({
+      projectId: project.id,
+      action: 'commit_proposal',
+      targetType: 'proposal_view',
+      targetId: 'wpvw_src',
+      triggerSource: 'review_decision',
+      result: 'success',
+      sourceRefs: [{ kind: 'draft', id: 'wdft_src' }],
+    });
+    expect(log.sourceRefs).toEqual([{ kind: 'draft', id: 'wdft_src' }]);
+    const reloaded = store.getAuditLog(log.id)!;
+    expect(reloaded.sourceRefs).toEqual([{ kind: 'draft', id: 'wdft_src' }]);
+
+    // 不传 → 默认空数组（既有 recordAudit 调用方零改不破）
+    const logEmpty = store.recordAudit({
+      projectId: project.id,
+      action: 'create_draft',
+      targetType: 'draft',
+    });
+    expect(logEmpty.sourceRefs).toEqual([]);
+  });
+
+  it('resolveDecision 对非 open 状态抛 WritingError(INVALID_STATUS_TRANSITION)', () => {
+    const project = store.createProject('测试');
+    const decision = store.createDecision(project.id, {
+      kind: 'confirm_draft',
+      title: '确认提交',
+    });
+    expect(decision.status).toBe('open');
+
+    // 先正常 resolve（open → resolved）
+    store.resolveDecision(decision.id, 'resolved', '一次');
+    expect(store.getDecision(decision.id)!.status).toBe('resolved');
+
+    // 再对已 resolved 的决策 resolve → UPDATE WHERE status='open' 命中 0 行 → 抛结构化错误码
+    // （W14：此前为裸 Error，调用方无法按码分流；现经 ERROR_RECOVERY_MAP 出"当前状态不允许此操作"人话）
+    try {
+      store.resolveDecision(decision.id, 'resolved', '二次');
+      throw new Error('应抛错但未抛');
+    } catch (e) {
+      expect(e).toBeInstanceOf(WritingError);
+      expect((e as WritingError).code).toBe(WritingErrorCode.INVALID_STATUS_TRANSITION);
+    }
   });
 });

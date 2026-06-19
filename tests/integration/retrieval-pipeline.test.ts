@@ -22,6 +22,10 @@ import { tmpdir } from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 
+// 守卫：无 EMBEDDING_API_KEY 时 skip 而非 fail（beforeAll seed 需要 embedder）
+const HAS_KEY = !!process.env['EMBEDDING_API_KEY'];
+const describeIf = HAS_KEY ? describe : describe.skip;
+
 // ---------------------------------------------------------------------------
 // 测试环境
 // ---------------------------------------------------------------------------
@@ -121,7 +125,7 @@ afterAll(() => {
 // 测试
 // ---------------------------------------------------------------------------
 
-describe('完整检索管线', () => {
+describeIf('完整检索管线', () => {
   it('ContextAnalyzer + Retriever + FactRenderer 完整链路', async () => {
     const analyzer = new ContextAnalyzer(factStore);
     const retriever = new RelevantFactRetriever(

@@ -17,6 +17,7 @@ import { AuditService } from './audit-service.js';
 import type { WritingRequestContext } from './context.js';
 import type { PendingDecisionItem, DecisionKind } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
+import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
 
 export class WorkflowService {
   private store: SQLiteWritingStore;
@@ -89,10 +90,10 @@ export class WorkflowService {
   ): PendingDecisionItem {
     const decision = this.store.getDecision(decisionId);
     if (!decision) {
-      throw new Error(`找不到待确认事项: ${decisionId}`);
+      throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到待确认事项: ${decisionId}`, { objectType: 'decision', objectId: decisionId });
     }
     if (decision.status !== 'open') {
-      throw new Error(`待确认事项 ${decisionId} 已被处理（当前状态: ${decision.status}）`);
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, `待确认事项 ${decisionId} 已被处理（当前状态: ${decision.status}）`, { currentStatus: decision.status, attemptedAction: 'resolve' });
     }
 
     // 乐观锁更新：仅 WHERE status = 'open' 时成功

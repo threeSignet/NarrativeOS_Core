@@ -669,10 +669,10 @@ describe('ThreadResolver', () => {
       expect(result.valid).toBe(false);
     });
 
-    it('渐进型 RESOLVED → PLANTED → 非法', () => {
+    it('渐进型 RESOLVED → PLANTED → 合法（Retcon 恢复：回收事件被撤回，线索回到埋种态）', () => {
       const thread = makeProgressiveThread({ status: 'RESOLVED' });
       const result = resolver.validateTransition(thread, 'PLANTED');
-      expect(result.valid).toBe(false);
+      expect(result.valid).toBe(true);
     });
 
     it('渐进型 ABANDONED → RESOLVED → 非法（终态不可恢复）', () => {

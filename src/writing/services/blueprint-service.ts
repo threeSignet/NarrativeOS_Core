@@ -23,6 +23,7 @@ import type {
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { validateBlueprintTransition } from '../models/state-machine.js';
+import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
 
 export class BlueprintService {
   private store: SQLiteWritingStore;
@@ -86,27 +87,36 @@ export class BlueprintService {
     blueprintId: string,
   ): ProjectBlueprint {
     const blueprint = this.store.getBlueprint(blueprintId);
-    if (!blueprint) throw new Error(`找不到蓝图: ${blueprintId}`);
+    if (!blueprint) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到蓝图: ${blueprintId}`, { objectType: 'blueprint', objectId: blueprintId });
 
     // P1-3 修复：状态机校验收敛到 state-machine（单一真相源）
     // （允许 drafted/reviewed/evolving → active；active/superseded/archived/implicit 被拒）
     validateBlueprintTransition(blueprint.maturity, 'active', blueprintId);
 
-    // supersede 旧 active 蓝图
-    const active = this.store.getActiveBlueprint(ctx.projectId);
-    if (active && active.id !== blueprintId) {
-      this.store.supersedeBlueprint(active.id, blueprintId);
-    }
+    // supersede 旧 active + 激活新蓝图必须原子：任一步失败整体回滚，避免残留两个
+    // maturity='active' 蓝图破坏 §6 activeBlueprintId 派生真相的唯一性。两条 updateBlueprint
+    // 各自带乐观锁（version 守卫 + 推进），取代原先裸 UPDATE 的 supersedeBlueprint——后者
+    // 无 version 守卫、不推进 version，并发下无法被 getActiveBlueprint 的 version DESC 正确裁决。
+    // 当前 better-sqlite3 同步 + Node 单线程下并发实际不发生，事务是为语义完整性兜底。
+    return this.store.runInTransaction(() => {
+      const active = this.store.getActiveBlueprint(ctx.projectId);
+      if (active && active.id !== blueprintId) {
+        this.store.updateBlueprint(active.id, active.version, {
+          maturity: 'superseded',
+          supersededBy: blueprintId,
+        });
+      }
 
-    this.store.updateBlueprint(blueprintId, { maturity: 'active' });
+      this.store.updateBlueprint(blueprintId, blueprint.version, { maturity: 'active' });
 
-    this.audit.record(ctx, {
-      action: 'accept_blueprint',
-      targetType: 'blueprint',
-      targetId: blueprintId,
+      this.audit.record(ctx, {
+        action: 'accept_blueprint',
+        targetType: 'blueprint',
+        targetId: blueprintId,
+      });
+
+      return this.store.getBlueprint(blueprintId)!;
     });
-
-    return this.store.getBlueprint(blueprintId)!;
   }
 
   /**
@@ -146,7 +156,7 @@ export class BlueprintService {
     };
 
     const existing = blueprint.changeSuggestions ?? [];
-    this.store.updateBlueprint(blueprint.id, {
+    this.store.updateBlueprint(blueprint.id, blueprint.version, {
       changeSuggestions: [...existing, suggestion],
       maturity: blueprint.maturity === 'active' ? 'evolving' : blueprint.maturity,
     });
@@ -185,7 +195,7 @@ export class BlueprintService {
     }
 
     if (!targetBlueprint || !targetSuggestion) {
-      throw new Error(`找不到变更建议: ${suggestionId}`);
+      throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到变更建议: ${suggestionId}`, { objectType: 'blueprint_change_suggestion', objectId: suggestionId });
     }
 
     // 更新 suggestion 状态
@@ -231,7 +241,7 @@ export class BlueprintService {
       }
     }
 
-    this.store.updateBlueprint(targetBlueprint.id, {
+    this.store.updateBlueprint(targetBlueprint.id, targetBlueprint.version, {
       entityTypes: updatedEntityTypes,
       relationTypes: updatedRelationTypes,
       changeSuggestions: updatedSuggestions,
@@ -249,6 +259,10 @@ export class BlueprintService {
 
   /**
    * 拒绝蓝图变更建议
+   *
+   * Agent 可调用：是（LOW_RISK_WRITE — 仅标 dismissed，不改蓝图结构，与 discardIdea 同级）。
+   * 与 acceptBlueprintChange（COMMIT_FORBIDDEN）不对称：accept 会落地结构变更（加 entityType/relationType），
+   * reject 只丢弃建议、原文保留可追溯，故归低风险写入。
    */
   rejectBlueprintChange(
     ctx: WritingRequestContext,
@@ -265,14 +279,14 @@ export class BlueprintService {
     }
 
     if (!targetBlueprint) {
-      throw new Error(`找不到变更建议: ${suggestionId}`);
+      throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到变更建议: ${suggestionId}`, { objectType: 'blueprint_change_suggestion', objectId: suggestionId });
     }
 
     const updatedSuggestions = (targetBlueprint.changeSuggestions ?? []).map(s =>
       s.id === suggestionId ? { ...s, status: 'dismissed' as const } : s,
     );
 
-    this.store.updateBlueprint(targetBlueprint.id, {
+    this.store.updateBlueprint(targetBlueprint.id, targetBlueprint.version, {
       changeSuggestions: updatedSuggestions,
     });
 

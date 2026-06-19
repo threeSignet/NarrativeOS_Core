@@ -69,11 +69,11 @@ interface SourceRef {
 - JSON 字段使用 `TEXT NOT NULL DEFAULT '[]'`（与 agent 表 `detail_json` 一致）
 - 软删除使用 `deleted_at TEXT`（NULL = 活跃）
 
-### 3.2 建表 SQL（11 张表）
+### 3.2 建表 SQL（13 张表）
 
 ```sql
 -- =============================================================================
--- Phase 7 写作层表（11 张），与 Core 表 / Agent 表同库
+-- Phase 7 写作层表（13 张），与 Core 表 / Agent 表同库
 -- =============================================================================
 
 -- W.1 writing_projects：作品项目根容器
@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS writing_projects (
   premise              TEXT,
   status               TEXT NOT NULL DEFAULT 'planning'
                        CHECK(status IN ('planning','drafting','reviewing','paused','archived')),
+  -- active_blueprint_id：作者手动标注引用，非系统真相源（§6 不变式）。当前蓝图真相走
+  -- getActiveBlueprint() 的 maturity 派生；本列仅给未来 /project set 手动 pin 用，默认 NULL
   active_blueprint_id  TEXT,
   current_draft_id     TEXT,
   workspace_mode       TEXT NOT NULL DEFAULT 'planning'
@@ -177,6 +179,7 @@ CREATE TABLE IF NOT EXISTS writing_drafts (
   summary                 TEXT,
   status                  TEXT NOT NULL DEFAULT 'drafting'
                           CHECK(status IN ('drafting','ready_to_simulate','simulated','committed','archived','error')),
+  version                 INTEGER NOT NULL DEFAULT 1,
   source_refs_json        TEXT NOT NULL DEFAULT '[]',
   linked_proposal_view_id TEXT,
   version_group_id        TEXT,
@@ -239,6 +242,7 @@ CREATE TABLE IF NOT EXISTS writing_proposal_views (
   project_id             TEXT NOT NULL,
   source_draft_id        TEXT,
   source_entity_sketch_id TEXT,
+  source_refs_json       TEXT NOT NULL DEFAULT '[]',
   proposal_type          TEXT NOT NULL DEFAULT 'event'
                          CHECK(proposal_type IN ('event','entity_registration','thread','knowledge','schema_extension','retcon')),
   core_proposal_id       TEXT,
@@ -249,6 +253,8 @@ CREATE TABLE IF NOT EXISTS writing_proposal_views (
   fact_diff_json         TEXT NOT NULL DEFAULT '[]',
   involved_entity_ids_json TEXT NOT NULL DEFAULT '[]',
   rule_warnings_json     TEXT NOT NULL DEFAULT '[]',
+  -- W9：本次推演的原始输入（eventDescription/eventType/chapter/factChanges），供重新推演 simulateProposal 重放
+  simulation_inputs_json TEXT,
   author_decision        TEXT,
   author_decision_at     TEXT,
   core_event_id          TEXT,
@@ -271,8 +277,9 @@ CREATE TABLE IF NOT EXISTS writing_audit_logs (
   trigger_source  TEXT NOT NULL DEFAULT 'author_action',
   result          TEXT NOT NULL DEFAULT 'success'
                   CHECK(result IN ('success','failure','partial')),
-  detail_json     TEXT NOT NULL DEFAULT '{}',
-  error_code      TEXT,
+  detail_json      TEXT NOT NULL DEFAULT '{}',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  error_code       TEXT,
   request_id      TEXT,
   session_id      TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -280,6 +287,7 @@ CREATE TABLE IF NOT EXISTS writing_audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_wal_project ON writing_audit_logs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_wal_target ON writing_audit_logs(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_wal_target_id ON writing_audit_logs(target_id);
 CREATE INDEX IF NOT EXISTS idx_wal_action ON writing_audit_logs(project_id, action);
 
 -- W.10 writing_core_refs：写作层对象到 Core ID 的引用索引
@@ -295,6 +303,8 @@ CREATE TABLE IF NOT EXISTS writing_core_refs (
                       CHECK(ref_status IN ('active','stale','broken')),
   last_verified_at    TEXT,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at          TEXT,
   FOREIGN KEY (project_id) REFERENCES writing_projects(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wcr_writing ON writing_core_refs(writing_object_type, writing_object_id);
@@ -317,10 +327,41 @@ CREATE TABLE IF NOT EXISTS writing_jobs (
                   CHECK(created_by IN ('author','agent','system')),
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at      TEXT,
   FOREIGN KEY (project_id) REFERENCES writing_projects(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wj_project ON writing_jobs(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_wj_type ON writing_jobs(project_id, job_type, status);
+
+-- W.12 writing_workspace_layouts：工作台布局容器（§3.1 / §22.1，与项目 1:1）
+-- W12 组合初始化新增：project_id UNIQUE 保证一项目一布局。Phase 7 只持久化面板布局 JSON
+-- 快照 + 乐观锁版本；多面板拖拽/聚焦历史/预设等交互属 UI 层，panel_layout_json 为其预留落点。
+CREATE TABLE IF NOT EXISTS writing_workspace_layouts (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL UNIQUE,
+  panel_layout_json TEXT NOT NULL DEFAULT '{}',
+  version           INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at        TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wlay_project ON writing_workspace_layouts(project_id);
+
+-- W.13 writing_project_preferences：项目级作者偏好容器（§3.1，与项目 1:1）
+-- W12 组合初始化新增：createProject 时初始化为空 {}，随作者表达偏好逐步填充。
+-- 承载类型/关系/空间/视图/工作流偏好（与 §18 StyleGuide「语言风格」正交）。
+CREATE TABLE IF NOT EXISTS writing_project_preferences (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL UNIQUE,
+  preferences_json TEXT NOT NULL DEFAULT '{}',
+  version          INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpref_project ON writing_project_preferences(project_id);
 ```
 
 ### 3.3 表数量决策说明
@@ -330,6 +371,13 @@ DQ-9 `CoreReferenceIndex` 是否独立建表 → **是，独立建表 `writing_c
 
 DQ-10 `WritingDomainEvent` 是否持久化 → **Phase 7 作为内存事件 + 审计日志组合**。
 持久化领域事件表留到后续阶段（需要事件溯源/重放能力时再建表）。
+
+DQ-W12 `WorkspaceLayout` / `ProjectPreferenceProfile` 是否独立建表 → **是，各自独立 1:1 表**（`writing_workspace_layouts` / `writing_project_preferences`）。
+理由：Feature-Spec §3.1 要求 createProject 组合初始化时创建这两个容器，且二者结构各自演化
+（面板布局 vs 创作工作偏好），独立表 + 乐观锁版本号便于并发更新与未来 UI 层接入。两表均
+`project_id UNIQUE`（一项目一容器），`deleted_at` 生命周期跟随项目（softDeleteProject 级联）。
+面板拖拽/聚焦历史/预设等 UI 交互行为不属 Phase 7 写作层，`panel_layout_json` 为 UI 层预留
+自由结构落点（类型 unknown，结构契约由消费层定义）。
 
 ---
 
@@ -476,6 +524,10 @@ open ──→ author_approved ──→ committed
 - `expired`：来源草案已修改，需重新推演
 - `superseded`：被新 Proposal View 替代
 
+> 精确跳转表以 §17 `PROPOSAL_VIEW_TRANSITIONS` 为准。`author_approved` 另含两条非显然出边：
+> - →`open`：materializeProposalView 复用同草案活跃 PV、但提案内容因 Agent 重推产生新 proposalId 时，回到 open 重新审核（P0-1 修复）；
+> - →`expired`：提交时 Core 返回 PROPOSAL_NOT_FOUND（proposal 跨会话内存丢失、不可恢复），区别于 `commit_failed`（可重试技术失败）（§7.11.6）。
+
 ---
 
 ## 6. 领域对象 TypeScript 类型
@@ -498,6 +550,20 @@ export interface WritingProject {
   title: string;
   premise?: string;
   status: ProjectStatus;
+  /**
+   * 当前蓝图的手动标注引用（作者可选，默认空）。
+   *
+   * 【不变式 · 真相源单一化】这不是"当前蓝图"的系统判断依据。系统对"当前蓝图"的判断
+   * 必须且只能经 WritingStore.getActiveBlueprint()（按 maturity='active'|'evolving' 派生，
+   * 见下方 store getActiveBlueprint 实现）。activeBlueprintId 绝不参与任何决策分支：
+   *   - 不被 createProject 回填（§3.1 仅建 implicit 蓝图，implicit 非 active/evolving）
+   *   - 不被 acceptBlueprintDraft / acceptBlueprintChange 回填
+   *   - 任何读取方都不允许写 `project.activeBlueprintId ? X : getActiveBlueprint()` 这种
+   *     二选一分叉——会造出与派生真相并存的第二条真相，违背世界状态一致性
+   *
+   * 语义：为未来 `/project set activeBlueprintId` CLI 命令预留的「作者显式 pin」注释字段，
+   * 与系统派生真相解耦。二者不一致时一律以 getActiveBlueprint() 为准。
+   */
   activeBlueprintId?: string;
   currentDraftId?: string;
   workspaceMode: WorkspaceMode;
@@ -865,7 +931,7 @@ export interface WritingRequestContext {
 **职责**：项目 CRUD、作者目标管理、工作模式切换、归档
 **复杂度**：低——纯写作层状态，不接触 Core
 
-#### createProject
+#### createProject（§3.1 组合初始化）
 
 ```
 Agent 可调用：是（LOW_RISK_WRITE）
@@ -873,22 +939,44 @@ Agent 可调用：是（LOW_RISK_WRITE）
 createProject(ctx, { title, premise? }):
 
   前置条件:
-    - title 非空字符串
+    - title 非空字符串（trim 后长度 > 0）
 
-  主流程:
+  主流程（单一事务，原子性——任一子对象创建失败则整体回滚）:
     1. WritingStore.createProject(title, premise)
        → status='planning', workspaceMode='planning'
+    2. WritingStore.createBlueprint(projectId, { maturity: 'implicit' })
+       → 初始 ProjectBlueprint（潜在结构种子）
+    3. （premise 非空时）WritingStore.createIdeaCard(projectId,
+         { content: premise, kind: 'premise' }) → maturity='raw'
+       → 第一条 IdeaCard 保存原始创意；空白开始则跳过
+    4. WritingStore.createWorkspaceLayout(projectId) → 默认工作台布局（1:1，空容器）
+    5. WritingStore.createProjectPreferenceProfile(projectId) → 项目级偏好容器（1:1，空 {}）
 
   副作用:
-    2. AuditService.record({
+    6. AuditService.record({
          action: 'create_project', targetType: 'project',
-         targetId: project.id, result: 'success'
+         targetId: project.id, result: 'success',
+         detail: { compositeInit: true, withPremiseIdea: !!premise }
        })
 
-  错误路径:
-    - WritingStore 写入失败 → 抛 WRITING_STORE_ERROR，不创建任何对象
+  不变量（§3.1）:
+    - 全部仅写 writing_* 表，绝不注册 Core Entity / 写入 Core Fact
+      （验收 WL-E2E-001：创建作品后 Core 中 Fact 数量不变）
+    - ProjectService 不注入 Core/ToolRouter，结构性保证
 
-  返回: WritingProject
+  设计取舍:
+    - activeBlueprintId 不回填（符合 §6 activeBlueprintId 不变式）：该字段是作者可选的
+      手动标注引用，非系统真相源——系统真相走 getActiveBlueprint()（maturity 派生）。
+      §3.1 仅建 implicit 蓝图且 implicit 非 'active'/'evolving'，回填指针会制造「指针指向
+      但派生查不到」的不一致。隐式种子经 listBlueprints 可取，待 BlueprintService 推进
+      maturity 后自然经 getActiveBlueprint() 成为活跃蓝图。
+    - premise 经 trim 后非空才创建 IdeaCard（空白开始无创意可存）。
+
+  错误路径:
+    - title 为空 → 抛 Error（事务未开始，不创建任何对象）
+    - WritingStore 写入失败 → 事务回滚，抛 WRITING_STORE_ERROR，不创建任何对象
+
+  返回: WritingProject (status='planning')
 ```
 
 #### updateAuthorGoal
@@ -921,7 +1009,7 @@ updateAuthorGoal(ctx, { goalId?, text, kind, priority?, scope? }):
 #### pauseAuthorGoal / archiveAuthorGoal
 
 ```
-Agent 可调用：是
+Agent 可调用：是（LOW_RISK_WRITE — §8.3.2）
 
 pauseAuthorGoal(ctx, goalId):
   1. WritingStore.getGoal(goalId) → 检查存在
@@ -1021,7 +1109,7 @@ captureIdea(ctx, { content, kind?, tags?, analysisPolicy? }):
 #### classifyIdea
 
 ```
-Agent 可调用：是
+Agent 可调用：是（LOW_RISK_WRITE — §8.3.2）
 
 classifyIdea(ctx, ideaId, { kind?, tags?, summary? }):
 
@@ -1232,6 +1320,10 @@ proposeBlueprintChange(ctx, suggestion):
 #### acceptBlueprintChange / rejectBlueprintChange
 
 ```
+Agent 可调用（两者权限不同，故分别标注）:
+  acceptBlueprintChange = 否（COMMIT_FORBIDDEN — 落地结构变更：加 entityType/relationType，需作者确认）
+  rejectBlueprintChange = 是（LOW_RISK_WRITE — 仅标 dismissed，不改蓝图结构，与 discardIdea 同级）
+
 acceptBlueprintChange(ctx, suggestionId):
 
   前置条件:
@@ -1472,7 +1564,7 @@ simulateDraft(ctx, draftId):
 #### abandonDraft
 
 ```
-Agent 可调用：是
+Agent 可调用：是（LOW_RISK_WRITE — §8.3.2）
 
 abandonDraft(ctx, draftId):
 
@@ -1521,7 +1613,9 @@ _markCommitFailed(draftId, error):
 #### detectEntityHints
 
 ```
-Agent 可调用：是（READ_QUERY — 虽然是写入 hint，但来自文本分析）
+Agent 可调用：是（REVIEW_CREATE — 创建供作者确认的 hint 提示对象；与 §8.3.2 权限矩阵一致。
+  注：早期此处误标 READ_QUERY——但 detectEntityHints 调 createEntitySketch 写库，而 READ_QUERY
+  仅限纯读（getProject/listDrafts 等），写入操作不应归此级。REVIEW_CREATE 语义即"生成可审核对象、不自动提交 Core"。）
 
 detectEntityHints(ctx, text):
 
@@ -1740,7 +1834,7 @@ _markRegistrationFailed(sketchId, error):
 #### simulateDraftAsEvent ★核心方法
 
 ```
-Agent 可调用：是
+Agent 可调用：是（REVIEW_CREATE — §8.3.2）
 
 simulateDraftAsEvent(ctx, { draftId, eventDescription, eventType, chapter, factChanges }):
 
@@ -2502,13 +2596,13 @@ export const AGENT_PERMISSIONS: Record<string, AgentCapability> = {
   // 只读查询（Agent 可自由调用）
   // =========================================================================
   'ProjectService.getProjectHomeView': AgentCapability.READ_QUERY,
-  'ProjectService.getProjectSettings': AgentCapability.READ_QUERY,
+  'ProjectService.getProject': AgentCapability.READ_QUERY,
   'ProjectService.listAuthorGoals': AgentCapability.READ_QUERY,
   'IdeaService.listIdeaCards': AgentCapability.READ_QUERY,
   'IdeaService.getIdeaDetail': AgentCapability.READ_QUERY,
-  'DraftService.getDraftEditorView': AgentCapability.READ_QUERY,
+  'DraftService.getDraft': AgentCapability.READ_QUERY,
   'DraftService.listDrafts': AgentCapability.READ_QUERY,
-  'EntityService.getEntityProfileView': AgentCapability.READ_QUERY,
+  'EntityService.getEntitySketch': AgentCapability.READ_QUERY,
   'EntityService.listCandidateQueue': AgentCapability.READ_QUERY,
   'BlueprintService.getActiveBlueprint': AgentCapability.READ_QUERY,
   'BlueprintService.getBlueprintEvolution': AgentCapability.READ_QUERY,
@@ -2534,6 +2628,7 @@ export const AGENT_PERMISSIONS: Record<string, AgentCapability> = {
   'DraftService.abandonDraft': AgentCapability.LOW_RISK_WRITE,
   'EntityService.deprecateEntitySketch': AgentCapability.LOW_RISK_WRITE,
   'WorkflowService.createPendingDecision': AgentCapability.LOW_RISK_WRITE,
+  'BlueprintService.rejectBlueprintChange': AgentCapability.LOW_RISK_WRITE,
 
   // =========================================================================
   // 候选写入（Agent 触发，需作者确认后才生效）
@@ -2560,18 +2655,37 @@ export const AGENT_PERMISSIONS: Record<string, AgentCapability> = {
   // =========================================================================
   'ProjectService.setWorkspaceMode': AgentCapability.COMMIT_FORBIDDEN,
   'ProjectService.archiveProject': AgentCapability.COMMIT_FORBIDDEN,
+  'ProjectService.transitionProjectStatus': AgentCapability.COMMIT_FORBIDDEN,
   'BlueprintService.acceptBlueprintDraft': AgentCapability.COMMIT_FORBIDDEN,
   'BlueprintService.acceptBlueprintChange': AgentCapability.COMMIT_FORBIDDEN,
-  'DraftService._markCommitted': AgentCapability.COMMIT_FORBIDDEN,
-  'EntityService._markRegistered': AgentCapability.COMMIT_FORBIDDEN,
   'WorkflowService.resolvePendingDecision': AgentCapability.COMMIT_FORBIDDEN,
   'CoreBridgeService.commitReviewedProposal': AgentCapability.COMMIT_FORBIDDEN,
   'CoreBridgeService.registerReviewedEntity': AgentCapability.COMMIT_FORBIDDEN,
-  'CoreBridgeService.commitReviewedThreadChange': AgentCapability.COMMIT_FORBIDDEN,
-  'CoreBridgeService.commitReviewedKnowledgeChange': AgentCapability.COMMIT_FORBIDDEN,
-  'CoreBridgeService.commitReviewedWorldPackageChange': AgentCapability.COMMIT_FORBIDDEN,
 };
 ```
+
+> **勘误（2026-06-14，W2 实装时核准）**：上方矩阵原表与真实代码有 9 处偏差，已逐一对齐
+> `src/writing/agent/permission-check.ts`（grep 核实）。未来修改本表须同步改代码。
+>
+> 1. **重命名（spec 用了不存在的方法名，真实类里是另一个名）**
+>    - `ProjectService.getProjectSettings` → **`getProject`**
+>    - `DraftService.getDraftEditorView` → **`getDraft`**
+>    - `EntityService.getEntityProfileView` → **`getEntitySketch`**
+> 2. **删除幽灵方法（spec 列出但代码中不存在）**
+>    - `DraftService._markCommitted` / `_markCommitFailed` —— §7.7 早期规划，已确认为死代码并移除
+>      （`draft-service.ts:434`：private 且无调用方，跨类不可调用，提交状态回写已内化于 `RealCoreBridge.commitReviewedProposal`）。
+>    - `EntityService._markRegistered` / `_markRegistrationFailed` —— 同上，已移除
+>      （`entity-service.ts:315`：注册状态回写已内化于 `RealCoreBridge.registerReviewedEntity`）。
+>    - `CoreBridgeService.commitReviewedThreadChange` —— Phase 8 内容（§7.7 表标 ❌ 未实装），当前不存在。
+>    - `CoreBridgeService.commitReviewedKnowledgeChange` / `commitReviewedWorldPackageChange` —— 未规划实装，不存在。
+>    （保留这些会让矩阵与真实 API 不符，且给读者"存在此方法"的错误印象。）
+> 3. **新增（真实存在且语义属 COMMIT_FORBIDDEN，原表遗漏）**
+>    - `ProjectService.transitionProjectStatus` —— 项目生命周期状态推进（`project-service.ts:258`），
+>      与 `setWorkspaceMode`/`archiveProject` 同级（仅作者直接驱动）。
+>
+> 注：内部回写方法（`_mark*`）本质属 `RealCoreBridge` 提交/注册流程的内部步骤，不暴露给 Agent，
+> 故不进入 Agent 权限矩阵；Agent 对提交/注册的调用由 `commitReviewedProposal`/`registerReviewedEntity`
+> 这两个公开方法承担，二者均为 COMMIT_FORBIDDEN（仅经作者确认通道豁免，见 §8.0 换调用者）。
 
 #### 8.3.3 Agent 调用写作层服务的流程
 
@@ -2871,6 +2985,8 @@ export const WritingErrorCode = {
   // 存储
   WRITING_STORE_ERROR: 'WRITING_STORE_ERROR',
   WRITING_OBJECT_NOT_FOUND: 'WRITING_OBJECT_NOT_FOUND',
+  /** 乐观锁冲突——对象被并发修改，调用方持有 version 过期（需重读后重试） */
+  VERSION_CONFLICT: 'VERSION_CONFLICT',
 } as const;
 
 export type WritingErrorCodeType = (typeof WritingErrorCode)[keyof typeof WritingErrorCode];
@@ -2886,8 +3002,13 @@ export type WritingErrorCodeType = (typeof WritingErrorCode)[keyof typeof Writin
 | `COREBRIDGE_COMMIT_FAILED` | "提交失败：[Core错误说明]" | 展示 CoreBridge 错误，修复后重试 |
 | `COREBRIDGE_WRITEBACK_FAILED` | "提交成功但写作层状态更新失败" | 触发对账恢复 |
 | `BLUEPRINT_MAPPING_LOW_CONFIDENCE` | "系统不确定如何将「{类型}」映射到世界状态" | 引导作者确认映射 |
+| `VERSION_CONFLICT` | "该对象已被修改，你的副本已过期" | 重新读取最新内容后重试 |
+| `DRAFT_NOT_READY_FOR_SIMULATION` | "草案尚未准备好推演" | 补全草案内容并检查状态 |
+| `WRITING_OBJECT_NOT_FOUND` | "找不到请求的写作层对象" | 检查对象是否已删除/归档 |
 
----
+> 上表为高频码示例。**完整 20 条映射**以 `src/writing/errors/error-codes.ts` 的 `ERROR_RECOVERY_MAP` 为权威真相源；
+> 运行时入口 `getErrorRecovery(code)`（按码取默认人话+恢复动作，未登记码返回保守兜底）与
+> `renderErrorForAuthor(err)`（把抛出的异常渲染为作者可读文案）二者共同保证"恢复文案单一真相源"。
 
 ## 11. 代码结构
 
@@ -3469,6 +3590,11 @@ export class SQLiteWritingStore {
   }
 
   getBlueprint(blueprintId: string): ProjectBlueprint | undefined { /* ... */ }
+  /**
+   * 当前活跃蓝图——【系统真相源】（§6 activeBlueprintId 不变式）。
+   * 按 maturity 派生（'active'|'evolving'，version 降序取最新），绝不读 project.active_blueprint_id 指针。
+   * §7.5/§7.7 流程、CLI /blueprint、Agent 能力矩阵等所有"当前蓝图"判断都必须经此方法。
+   */
   getActiveBlueprint(projectId: string): ProjectBlueprint | undefined {
     const row = this.db.prepare(
       "SELECT * FROM writing_blueprints WHERE project_id = ? AND maturity IN ('active','evolving') AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
@@ -3713,7 +3839,10 @@ const ENTITY_SKETCH_TRANSITIONS: Record<string, string[]> = {
   'hint':       ['candidate', 'deprecated'],
   'candidate':  ['approved', 'deprecated', 'merged'],
   'approved':   ['registered', 'deprecated', 'candidate'],  // candidate=退回
-  'registered': ['deprecated'],          // 已注册不可逆（修改走 Retcon）
+  // registered 已被 Core 引用，普通状态机不可达任何状态；
+  // 废弃/合并必须经 Retcon 通道（独立于本状态机），故此处为空数组。
+  // 此修正消除与 EntityService.deprecateEntitySketch 业务规则的双重真相源矛盾。
+  'registered': [],
   'deprecated': ['candidate'],           // 可恢复
   'merged':     [],                      // 终态
   'error':      ['candidate', 'approved', 'deprecated'],
@@ -3815,7 +3944,11 @@ export function validateEntitySketchTransition(
 
 const PROPOSAL_VIEW_TRANSITIONS: Record<string, string[]> = {
   'open':              ['author_approved', 'author_rejected', 'expired'],
-  'author_approved':   ['committed', 'commit_failed'],
+  // 'open' 放行：materializeProposalView 复用同草案活跃 PV、但提案内容因 Agent 重推产生新 proposalId 时，
+  // 旧批准针对旧内容，新内容须回到 open 重新审核（P0-1 修复，让状态机表与 narrative-agent 实际行为一致）。
+  // 'expired' 放行（§7.11.6）：提交时 Core 返回 PROPOSAL_NOT_FOUND（proposal 跨会话内存丢失、已不可恢复），
+  // 区别于 'commit_failed'（可重试/可重新审核的技术失败）。
+  'author_approved':   ['open', 'committed', 'commit_failed', 'expired'],
   'author_rejected':   ['superseded'],
   'committed':         [],
   'commit_failed':     ['open'],              // 修复后重试
@@ -4233,7 +4366,7 @@ describe('Phase 7 主闭环', () => {
 | A1 | writing-store.ts DDL | ✅ | 含 chapter 字段 + 乐观锁 |
 | A2 | models/types.ts | ✅ | 11 个领域类型 |
 | A3 | models/source-ref.ts | ✅ | |
-| A4 | errors/error-codes.ts | ✅ | 17 个错误码 |
+| A4 | errors/error-codes.ts | ✅ | 20 个错误码（含 VERSION_CONFLICT）+ ERROR_RECOVERY_MAP 全量登记 |
 | A5 | services/context.ts | ✅ | WritingRequestContext |
 | A6 | audit-service.ts | ✅ | |
 | A7 | project-service.ts | ✅ | |
@@ -4244,8 +4377,8 @@ describe('Phase 7 主闭环', () => {
 | A12 | workflow-service.ts | ✅ | 含乐观锁 resolve |
 | A13 | blueprint-service.ts | ✅ | 含去重 + accept/reject |
 | A14 | core-bridge/real-bridge.ts | ✅ | 真实包装 ToolRouter |
-| ⬜ | agent 改造 + CLI 确认通道 | ⬜ | §8 |
-| ⬜ | 端到端测试（:memory: SQLite + 真实 Core） | ⬜ | §18-19 |
+| ✅ | agent 改造 + CLI 确认通道 | ✅ | §8（W1/W2 权限门控 + 桥接层 + Phase A/B/C 完成） |
+| ✅ | 端到端测试（:memory: SQLite + 真实 Core） | ✅ | §18-19：W18-a MockLLMClient + W18-b writing-main-loop 重写（9 测试）+ W19 全套已落地（核实：#46 commit-gate/permission-check、#47 core-bridge-audit、#48 visibility-filter、#50 reconcile；详见 core-development-log 2026-06-17 批次） |
 
 ---
 

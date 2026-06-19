@@ -234,6 +234,24 @@ export enum ToolErrorCode {
   EMBEDDING_SERVICE_UNAVAILABLE = 'EMBEDDING_SERVICE_UNAVAILABLE', // §9.3: Embedding API 不可用
   LANCEDB_ERROR = 'LANCEDB_ERROR',
   LLM_API_ERROR = 'LLM_API_ERROR',
+
+  // ---- 权限错误（Agent 适配层 §8.3）：仅由 Agent 工具权限门控抛出，Core 内部永不抛出 ----
+  /**
+   * Agent 的 ReAct 循环禁止直接调用 commit_event。
+   * 提交须经用户在 Proposal Review 通道确认后由系统执行（§8.0/§8.2.1）。
+   *
+   * 注意：这与 WritingErrorCode.AGENT_COMMIT_FORBIDDEN 是两道不同的门——
+   *   - 本码（ToolErrorCode）：LLM 工具调用层拦截，流经 ToolResult
+   *   - WritingErrorCode 同名码：CoreBridge 方法调用层拦截（W2 接入），流经写作层错误包装
+   */
+  AGENT_COMMIT_FORBIDDEN = 'AGENT_COMMIT_FORBIDDEN',
+
+  /**
+   * Agent 的 ReAct 循环禁止直接调用 register_entity。
+   * 实体注册须经审核通道（detectEntityHints → EntitySketch 审批）后由系统执行（§25 #7）。
+   * 与 AGENT_COMMIT_FORBIDDEN 并列：提交类 vs 注册类，消息与引导文案不同。
+   */
+  AGENT_REGISTER_FORBIDDEN = 'AGENT_REGISTER_FORBIDDEN',
 }
 
 /** 章节级别告警（非阻塞，但注入 LLM 提示） */

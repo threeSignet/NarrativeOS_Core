@@ -46,6 +46,44 @@ export interface WritingProject {
 }
 
 // =============================================================================
+// WorkspaceLayout（§3.1 默认工作台布局 / §22.1 工作台布局容器）
+// =============================================================================
+// 项目级工作台布局状态容器（与项目 1:1）。Phase 7 写作层只持久化「面板布局 JSON 快照」+
+// 乐观锁版本号；Feature-Spec §22.1 描述的多面板拖拽、聚焦历史、保存预设、按工作模式切换面板
+// 组合等交互行为属 PC 端 UI 层职责（不在 Phase 7 写作层范围）。此处的 JSON 容器为 UI 层预留
+// 持久化落点——UI 把当前面板排列序列化存入 panelLayout，写作层只负责可靠存取 + 并发版本控制，
+// 不解析其结构（故类型为 unknown，结构契约由 UI 层定义）。
+export interface WorkspaceLayout {
+  id: string;
+  projectId: string;
+  /** 面板布局快照（UI 层自由结构：可见面板、尺寸、排列等）。创建时为 {} */
+  panelLayout: unknown;
+  /** 乐观锁版本号——每次更新 +1，updateWorkspaceLayout 以此做并发冲突检测 */
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// =============================================================================
+// ProjectPreferenceProfile（§3.1 项目级作者偏好容器）
+// =============================================================================
+// 项目级作者偏好聚合容器（与项目 1:1），承载类型/关系/空间/视图/工作流等「创作工作偏好」。
+// Phase 7 在 createProject 时初始化为空容器（preferences = {}），随作者表达偏好逐步填充。
+// 与 §18 StyleGuide 正交：StyleGuide 是「语言风格」（人称/节奏/句式/禁用表达），属行文层；
+// 本容器是「创作工作偏好」，属项目元数据层，两者各自独立持久化。结构契约由消费层定义，故
+// 类型为 unknown。
+export interface ProjectPreferenceProfile {
+  id: string;
+  projectId: string;
+  /** 项目级作者偏好聚合（UI/服务层自由结构）。创建时为 {} */
+  preferences: unknown;
+  /** 乐观锁版本号——每次更新 +1，updateProjectPreferenceProfile 以此做并发冲突检测 */
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// =============================================================================
 // AuthorGoal（§3.2 编辑作品目标）
 // =============================================================================
 
@@ -220,8 +258,11 @@ export interface WritingDraft {
   content: string;
   summary?: string;
   status: DraftStatus;
+  /** 乐观锁版本号——每次更新 +1，updateDraft 以此做并发冲突检测 */
+  version: number;
   sourceRefs: SourceRef[];
   linkedProposalViewId?: string;
+  /** 版本链分组 ID（同名/同事件的草案修订链），与乐观锁 version 是两个概念 */
   versionGroupId?: string;
   createdAt: string;
   updatedAt: string;
@@ -311,6 +352,25 @@ export type ProposalViewStatus =
   | 'expired'
   | 'superseded';
 
+/**
+ * 一次沙盒推演的原始输入（W9）
+ *
+ * simulateDraftAsEvent 接收这些参数调 propose_event；为支持「重新推演」（simulateProposal），
+ * 它们被持久化到 ProposalView，以便对审核中的提案用相同输入重跑 propose_event、对照最新 Core 状态
+ * 产出新鲜后果。factChanges 是 Agent 传入的 snake_case DSL 原文（含 ent_ 主体、change_id）——
+ * 注意它是内部存储字段（非 ViewModel），§9.1 过滤在投影层（buildProposalReviewData）完成。
+ */
+export interface SimulationInputs {
+  /** 事件描述（草案 summary/title 兜底） */
+  eventDescription: string;
+  /** 事件类型（draft.kind，event→custom） */
+  eventType: string;
+  /** 章节号 */
+  chapter: number;
+  /** 事实变更 DSL 原文（snake_case，Agent 传入） */
+  factChanges: unknown[];
+}
+
 export interface FactDiffEntry {
   op: 'new' | 'updated' | 'retracted';
   humanDescription: string;
@@ -332,6 +392,11 @@ export interface WritingProposalView {
   projectId: string;
   sourceDraftId?: string;
   sourceEntitySketchId?: string;
+  /**
+   * W14：PV 来源追溯（§4 SourceRef 模型）——本 PV 由哪个草案/灵感/蓝图触发。
+   * 与 sourceDraftId 互补：sourceDraftId 是结构化 FK（单源），sourceRefs 是可扩展来源链（可含多源）。
+   */
+  sourceRefs: SourceRef[];
   proposalType: ProposalType;
   coreProposalId?: string;
   coreBridgeResult?: unknown;
@@ -340,6 +405,11 @@ export interface WritingProposalView {
   factDiff: FactDiffEntry[];
   involvedEntityIds: string[];
   ruleWarnings: RuleWarning[];
+  /**
+   * W9：本次推演的原始输入（持久化以支持重新推演 simulateProposal）。
+   * 仅 simulateDraft 产出的 PV 携带；实体注册等其它来源的 PV 为 undefined。
+   */
+  simulationInputs?: SimulationInputs;
   authorDecision?: string;
   authorDecisionAt?: string;
   coreEventId?: string;
@@ -373,6 +443,11 @@ export interface WritingAuditLog {
   triggerSource: AuditTrigger;
   result: AuditResult;
   detail?: unknown;
+  /**
+   * W14：审计来源追溯——本次动作由哪个创作对象（草案/灵感/蓝图）触发。
+   * 与 triggerSource（谁触发：作者/Agent/系统）互补，记录"触发对象"而非"触发者"。
+   */
+  sourceRefs: SourceRef[];
   errorCode?: string;
   requestId?: string;
   sessionId?: string;

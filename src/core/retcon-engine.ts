@@ -88,6 +88,12 @@ export interface RetconProposal {
   committed: boolean;
   /** 提交后生成的系统事件 ID */
   retconEventId?: string;
+  /**
+   * propose 时捕获的世界状态版本号（乐观锁）。
+   * commit_retcon 时用 tryUpdateStateVersion 校验——若 propose→commit 之间有并发提交，
+   * 版本不匹配则 STALE_PROPOSAL（此前 commit_retcon 先读后 CAS 等价无条件+1，检测不到并发）。
+   */
+  expectedStateVersion: number;
 }
 
 /**
@@ -295,17 +301,15 @@ export class RetconEngine {
       }
     }
 
-    // 查询所有作用域中 canonical Fact，限制 valid_from >= 目标事件章节（时间上限）
-    const minRetconChapter = targetEvent.chapter;
+    // 查询所有作用域中 canonical Fact，限定为目标章节及之前（retcon 语义：改写过去，不波及未来）
+    const maxRetconChapter = targetEvent.chapter;
     const allFacts = factStore.query({ mode: 'current' });
     for (const f of allFacts) {
       if (f.context === targetContext) continue; // 排除同作用域
       if (!affectedSubjects.has(f.subject)) continue;
       if (f.certainty !== 'canonical') continue;
-      // 章节时间上限：只搜索 Retcon 目标章节之后或其他非当前作用域的事件
-      // 排除已被优先路径命中的（去重）
-      if (!affectedSubjects.has(f.subject)) continue;
-      if (f.certainty !== 'canonical') continue;
+      // 章节时间上限：只看 retcon 目标章节及之前的跨作用域 Fact（之前的死代码声明了变量但未使用）
+      if (f.validFrom > maxRetconChapter) continue;
 
       // 排除已被优先路径命中的（去重）
       if (bfsResult.crossScopeImpacts.some(ci => ci.factId === f.id)) continue;
@@ -505,6 +509,9 @@ export class RetconEngine {
       affectedFactIds,
       affectedEventIds,
       committed: false,
+      // 捕获 propose 时的世界状态版本（乐观锁，commit 时校验并发修改）
+      // 用 factStore 绑定的项目 ID，消除 'default' 硬编码（2026-06-18）
+      expectedStateVersion: factStore.getStateVersion(),
     };
 
     // 6. 保存到内存
@@ -564,10 +571,11 @@ export class RetconEngine {
     // 3-9. 事务内原子写入：乐观锁 → event → contested → thread → dependencies → audit → sync_queue
     // 任一步失败自动 ROLLBACK，保证不产生半截世界状态
     const txnResult = db.transaction(() => {
-      // 1. 乐观锁（事务内执行，失败则整个事务回滚）
-      const beforeVersion = factStore.getStateVersion('default');
-      if (!factStore.tryUpdateStateVersion('default', beforeVersion)) {
-        throw new Error('STALE_PROPOSAL: 状态版本冲突');
+      // 1. 乐观锁：用 proposal 缓存的 expectedStateVersion 校验（而非先读后 CAS）。
+      // 此前代码在事务内 getStateVersion 再 tryUpdate，读到的值必然匹配刚读的 → 等价无条件+1，
+      // 检测不到 propose→commit 间的并发提交。改为用 propose 时捕获的版本，与 commit_event 一致。
+      if (!factStore.tryUpdateStateVersion(undefined, proposal.expectedStateVersion)) {
+        throw new Error('STALE_PROPOSAL: 状态版本冲突（propose→commit 期间世界状态已变更）');
       }
 
       // allAffectedFactIds 复用事务外（第 557 行）已构建的列表，事务闭包可直接捕获外层 const，

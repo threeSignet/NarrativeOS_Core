@@ -260,12 +260,10 @@ export class ContextCompressor {
 
     for (const msg of messages) {
       if (msg.role === 'assistant') {
-        // 包含问句的摘要
-        if (msg.summary.includes('？') || msg.summary.includes('?')) {
-          questions.push(msg.summary);
-        }
-        // 包含"确认"/"等待"的摘要
-        if (msg.summary.includes('确认') || msg.summary.includes('等待')) {
+        // 一条摘要可能同时含问号与"确认/等待"——只 push 一次，避免重复占用名额
+        const isQuestion = msg.summary.includes('？') || msg.summary.includes('?');
+        const isConfirmation = msg.summary.includes('确认') || msg.summary.includes('等待');
+        if (isQuestion || isConfirmation) {
           questions.push(msg.summary);
         }
       }

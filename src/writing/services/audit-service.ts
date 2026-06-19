@@ -16,6 +16,7 @@
 import { SQLiteWritingStore } from '../repositories/writing-store.js';
 import type { WritingRequestContext } from './context.js';
 import type { WritingAuditLog, AuditResult } from '../models/types.js';
+import type { SourceRef } from '../models/source-ref.js';
 
 export class AuditService {
   private store: SQLiteWritingStore;
@@ -39,6 +40,8 @@ export class AuditService {
       result?: AuditResult;
       detail?: unknown;
       errorCode?: string;
+      // W14：审计来源追溯（§4 SourceRef）——透传到 store.recordAudit 写 source_refs_json
+      sourceRefs?: SourceRef[];
     },
   ): WritingAuditLog | undefined {
     try {
@@ -51,6 +54,7 @@ export class AuditService {
         result: params.result ?? 'success',
         detail: params.detail,
         errorCode: params.errorCode,
+        sourceRefs: params.sourceRefs,
         requestId: ctx.requestId,
         sessionId: ctx.sessionId,
       });
@@ -76,5 +80,24 @@ export class AuditService {
     },
   ): WritingAuditLog[] {
     return this.store.queryAuditLogs(ctx.projectId, filter);
+  }
+
+  /**
+   * 列出审计日志（G2，CLI `/audit` 数据源）
+   *
+   * 与 query 的区别：支持 `result` 过滤维度（success/failure/partial），limit 默认 30。
+   * 保留 query 不动以免破坏既有调用方（core-bridge-audit 等用 query）。
+   */
+  list(
+    ctx: WritingRequestContext,
+    filter?: {
+      limit?: number;
+      result?: AuditResult;
+      action?: string;
+      targetType?: string;
+      targetId?: string;
+    },
+  ): WritingAuditLog[] {
+    return this.store.listAuditLogs(ctx.projectId, filter);
   }
 }

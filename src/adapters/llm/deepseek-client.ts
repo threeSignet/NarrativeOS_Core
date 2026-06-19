@@ -42,8 +42,50 @@ function getConfig() {
 // DeepSeekLLMClientAdapter
 // ---------------------------------------------------------------------------
 
+/** 构造时可注入的覆盖项——优先于 .env 默认值。
+ *  apiKey/baseUrl/model 是 adapter 级配置；temperature/maxTokens 作为 per-call 默认
+ *  （ChatOptions 同名字段优先）。引入此构造参数是为了让调用方（尤其 live 测试）
+ *  能显式注入 apiKey/model，而非静默忽略——避免“传了配置却走 .env 默认”的假信心。 */
+export interface DeepSeekAdapterOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  /** 默认 temperature（当 ChatOptions.temperature 未指定时用） */
+  temperature?: number;
+  /** 默认 max_tokens（当 ChatOptions.max_tokens 未指定时用） */
+  maxTokens?: number;
+}
+
 export class DeepSeekLLMClientAdapter implements LLMClient {
+  /** 构造时注入的覆盖项——refreshConfig 每次重读 env 时仍保留这些覆盖 */
+  private readonly overrides: DeepSeekAdapterOptions;
   private config = getConfig();
+
+  constructor(opts: DeepSeekAdapterOptions = {}) {
+    this.overrides = opts;
+    // 立即合并覆盖项，使 this.config 在构造后即反映最终生效配置
+    this.refreshConfig();
+  }
+
+  /** 合并 .env 默认值与构造覆盖项，得到最终生效配置 */
+  private refreshConfig(): void {
+    const env = getConfig();
+    this.config = {
+      apiKey: this.overrides.apiKey ?? env.apiKey,
+      baseUrl: this.overrides.baseUrl ?? env.baseUrl,
+      model: this.overrides.model ?? env.model,
+    };
+  }
+
+  /** 解析本次调用的 temperature（per-call options 优先，回落构造默认） */
+  private resolveTemperature(options?: ChatOptions): number | undefined {
+    return options?.temperature ?? this.overrides.temperature;
+  }
+
+  /** 解析本次调用的 max_tokens（per-call options 优先，回落构造默认） */
+  private resolveMaxTokens(options?: ChatOptions): number | undefined {
+    return options?.max_tokens ?? this.overrides.maxTokens;
+  }
 
   // =========================================================================
   // chat — 纯文本对话
@@ -65,8 +107,10 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
       messages,
       stream: false,
     };
-    if (options?.temperature !== undefined) body['temperature'] = options.temperature;
-    if (options?.max_tokens !== undefined) body['max_tokens'] = options.max_tokens;
+    const temperature = this.resolveTemperature(options);
+    if (temperature !== undefined) body['temperature'] = temperature;
+    const maxTokens = this.resolveMaxTokens(options);
+    if (maxTokens !== undefined) body['max_tokens'] = maxTokens;
 
     const data = await this.callApi(body);
     // choices[0].message.content 是 DeepSeek 的标准返回格式
@@ -114,8 +158,10 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
       tool_choice: 'auto',
       stream: false,
     };
-    if (options?.temperature !== undefined) body['temperature'] = options.temperature;
-    if (options?.max_tokens !== undefined) body['max_tokens'] = options.max_tokens;
+    const temperature = this.resolveTemperature(options);
+    if (temperature !== undefined) body['temperature'] = temperature;
+    const maxTokens = this.resolveMaxTokens(options);
+    if (maxTokens !== undefined) body['max_tokens'] = maxTokens;
 
     const data = await this.callApi(body);
     const choices = data?.choices as Array<Record<string, unknown>> | undefined;
@@ -176,8 +222,10 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
       messages,
       stream: true,
     };
-    if (options?.temperature !== undefined) body['temperature'] = options.temperature;
-    if (options?.max_tokens !== undefined) body['max_tokens'] = options.max_tokens;
+    const temperature = this.resolveTemperature(options);
+    if (temperature !== undefined) body['temperature'] = temperature;
+    const maxTokens = this.resolveMaxTokens(options);
+    if (maxTokens !== undefined) body['max_tokens'] = maxTokens;
 
     return await this.callApiStream(body, onToken);
   }
@@ -204,8 +252,10 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
       tool_choice: 'auto',
       stream: true,
     };
-    if (options?.temperature !== undefined) body['temperature'] = options.temperature;
-    if (options?.max_tokens !== undefined) body['max_tokens'] = options.max_tokens;
+    const temperature = this.resolveTemperature(options);
+    if (temperature !== undefined) body['temperature'] = temperature;
+    const maxTokens = this.resolveMaxTokens(options);
+    if (maxTokens !== undefined) body['max_tokens'] = maxTokens;
 
     return await this.callApiStream(body, onToken);
   }
@@ -369,15 +419,13 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
    * 在每次 API 调用前检查，确保启动后修改 .env 能生效
    */
   private validateApiKey(): void {
-    // 每次调用重新读取配置（不缓存），以支持运行时配置变更
-    const config = getConfig();
-    if (!config.apiKey) {
+    // 每次调用重新读取 env（支持运行时配置变更），但保留构造时注入的覆盖项
+    this.refreshConfig();
+    if (!this.config.apiKey) {
       throw new Error(
         '[LLM_API_ERROR] DEEPSEEK_API_KEY 未配置。请在 .env 文件中设置 DEEPSEEK_API_KEY=sk-xxx'
       );
     }
-    // 更新实例配置以保持一致
-    this.config = config;
   }
 
   /**

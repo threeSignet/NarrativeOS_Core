@@ -188,9 +188,11 @@ describe('validateProposalViewTransition', () => {
     expect(() => validateProposalViewTransition('open', 'expired', 'pv1')).not.toThrow();
   });
 
-  it('允许 author_approved → committed / commit_failed', () => {
+  it('允许 author_approved → committed / commit_failed / expired', () => {
     expect(() => validateProposalViewTransition('author_approved', 'committed', 'pv1')).not.toThrow();
     expect(() => validateProposalViewTransition('author_approved', 'commit_failed', 'pv1')).not.toThrow();
+    // §7.11.6：提交时 PROPOSAL_NOT_FOUND（proposal 跨会话丢失）→ expired
+    expect(() => validateProposalViewTransition('author_approved', 'expired', 'pv1')).not.toThrow();
   });
 
   it('允许 commit_failed → open（失败后可重新审核）', () => {

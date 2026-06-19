@@ -21,6 +21,10 @@ import { tmpdir } from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 
+// 守卫：无 EMBEDDING_API_KEY 时 skip 而非 fail（beforeAll seed 需要 embedder）
+const HAS_KEY = !!process.env['EMBEDDING_API_KEY'];
+const describeIf = HAS_KEY ? describe : describe.skip;
+
 // ---- 测试环境 ----
 let lancedbDir: string;
 let vectorStore: LanceDBTableAdapter;
@@ -245,7 +249,7 @@ function reciprocalRank(
 // 测试
 // =============================================================================
 
-describe('§5B 检索质量评估', () => {
+describeIf('§5B 检索质量评估', () => {
   // 为每个查询运行检索并收集指标
   const results: Array<{
     queryId: string;

@@ -50,9 +50,23 @@ export interface FactStore {
   getById(factId: string): Fact | undefined;
   getRelationsTargeting(entityId: string, atChapter?: number): Fact[];
 
+  // ---- 实体存在性 ----
+  /**
+   * 检查实体是否已在 entities 表注册。
+   *
+   * 用于 witness_propagation 等规则：遍历 location fact 的 subject 作 witness 时，
+   * 必须过滤掉未注册的 subject（种子数据/直接 INSERT），否则产生的 knowledge 行
+   * entity_id 违反外键约束，导致整个 commit_event 事务回滚（FOREIGN KEY failed）。
+   */
+  entityExists(entityId: string): boolean;
+
   // ---- 乐观锁 ----
-  getStateVersion(projectId: string): number;                         // 获取项目当前乐观锁版本号
-  tryUpdateStateVersion(projectId: string, expectedVersion: number): boolean; // 条件递增，返回是否成功
+  // projectId 可选：省略时实现用自身绑定的项目 ID（消除 Core 层 'default' 硬编码，2026-06-18）
+  getStateVersion(projectId?: string): number;                              // 获取项目当前乐观锁版本号
+  tryUpdateStateVersion(projectId: string | undefined, expectedVersion: number): boolean; // 条件递增，返回是否成功
+
+  /** 该 factStore 绑定的项目 ID（Core 层状态版本乐观锁的 key） */
+  getProjectId(): string;
 }
 
 /** Fact 查询条件 */

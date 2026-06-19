@@ -87,7 +87,7 @@ WritingProject 不写 Core。
 interface WritingProject {
   id: string;
   title: string;
-  status: 'planning' | 'drafting' | 'revising' | 'paused' | 'archived';
+  status: 'planning' | 'drafting' | 'reviewing' | 'paused' | 'archived';
   premise?: string;
   authorGoalIds: string[];
   activeBlueprintId?: string;

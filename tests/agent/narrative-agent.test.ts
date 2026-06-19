@@ -59,7 +59,7 @@ function createTestEnv() {
   // 真实 DeepSeek flash 模型
   const llm = new DeepSeekLLMClientAdapter({
     apiKey: process.env['DEEPSEEK_API_KEY']!,
-    model: 'deepseek-chat',
+    model: process.env['LLM_MODEL'] ?? 'deepseek-v4-flash',
     temperature: 0.3,
     maxTokens: 2048,
   });

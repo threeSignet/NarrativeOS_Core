@@ -30,6 +30,7 @@
 import type Database from 'better-sqlite3';
 import type {
   WritingProject, ProjectStatus, WorkspaceMode,
+  WorkspaceLayout, ProjectPreferenceProfile,
   AuthorGoal, GoalKind, GoalPriority, GoalScope, GoalStatus,
   IdeaCard, IdeaKind, IdeaMaturity, IdeaSource, AnalysisPolicy,
   ProjectBlueprint, BlueprintMaturity, BlueprintTypeDef, BlueprintChangeSuggestion,
@@ -37,15 +38,24 @@ import type {
   WritingEntitySketch, EntitySketchStatus,
   PendingDecisionItem, DecisionKind,
   WritingProposalView, ProposalType, ProposalViewStatus,
-  FactDiffEntry, RuleWarning,
+  FactDiffEntry, RuleWarning, SimulationInputs,
   WritingAuditLog, AuditTrigger, AuditResult,
   WritingCoreRef, WritingObjectType, CoreObjectType, RefStatus,
   WritingJob, JobStatus, JobCreator,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
+import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
+import {
+  validateProjectTransition,
+  validateIdeaTransition,
+  validateBlueprintTransition,
+  validateDraftTransition,
+  validateEntitySketchTransition,
+  validateProposalViewTransition,
+} from '../models/state-machine.js';
 
 // =============================================================================
-// DDL — 11 张写作层表
+// DDL — 13 张写作层表（W12 新增 writing_workspace_layouts / writing_project_preferences）
 // =============================================================================
 
 export const WRITING_DDL = `
@@ -56,6 +66,8 @@ CREATE TABLE IF NOT EXISTS writing_projects (
   premise              TEXT,
   status               TEXT NOT NULL DEFAULT 'planning'
                        CHECK(status IN ('planning','drafting','reviewing','paused','archived')),
+  -- active_blueprint_id：作者手动标注引用，非系统真相源（§6 不变式，见 Phase7-Refinement.md）。
+  -- 当前蓝图真相走 getActiveBlueprint() 的 maturity 派生；本列仅给未来 /project set 手动 pin 用，默认 NULL
   active_blueprint_id  TEXT,
   current_draft_id     TEXT,
   workspace_mode       TEXT NOT NULL DEFAULT 'planning'
@@ -150,6 +162,7 @@ CREATE TABLE IF NOT EXISTS writing_drafts (
   summary                 TEXT,
   status                  TEXT NOT NULL DEFAULT 'drafting'
                           CHECK(status IN ('drafting','ready_to_simulate','simulated','committed','archived','error')),
+  version                 INTEGER NOT NULL DEFAULT 1,
   source_refs_json        TEXT NOT NULL DEFAULT '[]',
   linked_proposal_view_id TEXT,
   version_group_id        TEXT,
@@ -212,6 +225,7 @@ CREATE TABLE IF NOT EXISTS writing_proposal_views (
   project_id             TEXT NOT NULL,
   source_draft_id        TEXT,
   source_entity_sketch_id TEXT,
+  source_refs_json        TEXT NOT NULL DEFAULT '[]',
   proposal_type          TEXT NOT NULL DEFAULT 'event'
                          CHECK(proposal_type IN ('event','entity_registration','thread','knowledge','schema_extension','retcon')),
   core_proposal_id       TEXT,
@@ -222,6 +236,8 @@ CREATE TABLE IF NOT EXISTS writing_proposal_views (
   fact_diff_json         TEXT NOT NULL DEFAULT '[]',
   involved_entity_ids_json TEXT NOT NULL DEFAULT '[]',
   rule_warnings_json     TEXT NOT NULL DEFAULT '[]',
+  -- W9：本次推演的原始输入（eventDescription/eventType/chapter/factChanges），供重新推演 simulateProposal 重放
+  simulation_inputs_json TEXT,
   author_decision        TEXT,
   author_decision_at     TEXT,
   core_event_id          TEXT,
@@ -244,9 +260,10 @@ CREATE TABLE IF NOT EXISTS writing_audit_logs (
   trigger_source  TEXT NOT NULL DEFAULT 'author_action',
   result          TEXT NOT NULL DEFAULT 'success'
                   CHECK(result IN ('success','failure','partial')),
-  detail_json     TEXT NOT NULL DEFAULT '{}',
-  error_code      TEXT,
-  request_id      TEXT,
+  detail_json      TEXT NOT NULL DEFAULT '{}',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  error_code       TEXT,
+  request_id       TEXT,
   session_id      TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (project_id) REFERENCES writing_projects(id)
@@ -298,6 +315,37 @@ CREATE TABLE IF NOT EXISTS writing_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_wj_project ON writing_jobs(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_wj_type ON writing_jobs(project_id, job_type, status);
+
+-- W.12 writing_workspace_layouts：工作台布局容器（§3.1 / §22.1，与项目 1:1）
+-- project_id UNIQUE 保证一项目一布局。Phase 7 写作层只持久化面板布局 JSON 快照 + 乐观锁版本号；
+-- 多面板拖拽/聚焦历史/保存预设/按工作模式切换面板组合等交互属 PC 端 UI 层（不在 Phase 7 范围），
+-- 此处 panel_layout_json 为 UI 层预留自由结构落点。deleted_at 生命周期跟随项目（softDeleteProject 级联）。
+CREATE TABLE IF NOT EXISTS writing_workspace_layouts (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL UNIQUE,
+  panel_layout_json TEXT NOT NULL DEFAULT '{}',
+  version           INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at        TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wlay_project ON writing_workspace_layouts(project_id);
+
+-- W.13 writing_project_preferences：项目级作者偏好容器（§3.1，与项目 1:1）
+-- project_id UNIQUE 保证一项目一容器。createProject 时初始化为空 {}，随作者表达偏好逐步填充。
+-- 承载类型/关系/空间/视图/工作流等「创作工作偏好」（与 §18 StyleGuide「语言风格」正交）。
+CREATE TABLE IF NOT EXISTS writing_project_preferences (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL UNIQUE,
+  preferences_json TEXT NOT NULL DEFAULT '{}',
+  version          INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpref_project ON writing_project_preferences(project_id);
 `;
 
 // =============================================================================
@@ -317,6 +365,9 @@ const PREFIX = {
   audit_log:        'waul',
   core_ref:         'wcref',
   job:              'wjob',
+  // W12 §3.1 组合初始化：工作台布局 + 项目级偏好容器（均与项目 1:1）
+  workspace_layout: 'wlay',
+  project_preference: 'wpref',
 } as const;
 
 function makeId(prefix: string): string {
@@ -417,6 +468,7 @@ export interface DraftRow {
   content: string;
   summary: string | null;
   status: string;
+  version: number;
   source_refs_json: string;
   linked_proposal_view_id: string | null;
   version_group_id: string | null;
@@ -464,6 +516,7 @@ export interface ProposalViewRow {
   project_id: string;
   source_draft_id: string | null;
   source_entity_sketch_id: string | null;
+  source_refs_json: string;
   proposal_type: string;
   core_proposal_id: string | null;
   core_bridge_result_json: string;
@@ -472,6 +525,7 @@ export interface ProposalViewRow {
   fact_diff_json: string;
   involved_entity_ids_json: string;
   rule_warnings_json: string;
+  simulation_inputs_json: string | null;
   author_decision: string | null;
   author_decision_at: string | null;
   core_event_id: string | null;
@@ -490,12 +544,17 @@ export interface AuditLogRow {
   trigger_source: string;
   result: string;
   detail_json: string;
+  source_refs_json: string;
   error_code: string | null;
   request_id: string | null;
   session_id: string | null;
   created_at: string;
 }
 
+// CoreReferenceIndex（writing_core_refs）是纯指针/索引表：ref 本身即"写作对象→Core 对象"的来源链接
+// （writing_object_type/id 已捕获来源）。Feature-Spec §30.1 验收标准措辞为"所有**可追溯**对象都有来源字段"，
+// 指针基础设施不属"可追溯创作对象"范畴——加 sourceRefs 即死列（无写入方/读取方）。故有意不加，避免死代码。
+// （W14 范围决策，2026-06-14 用户确认排除 CoreReferenceIndex）
 export interface CoreRefRow {
   id: string;
   project_id: string;
@@ -523,6 +582,26 @@ export interface JobRow {
   updated_at: string;
 }
 
+export interface WorkspaceLayoutRow {
+  id: string;
+  project_id: string;
+  panel_layout_json: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface ProjectPreferenceProfileRow {
+  id: string;
+  project_id: string;
+  preferences_json: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
 // =============================================================================
 // 行 → 领域对象转换（snake_case → camelCase）
 // =============================================================================
@@ -540,6 +619,29 @@ function rowToProject(row: ProjectRow): WritingProject {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at ?? undefined,
+  };
+}
+
+function rowToWorkspaceLayout(row: WorkspaceLayoutRow): WorkspaceLayout {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    // JSON 列解析为对象（UI 层自由结构）；解析失败抛错（与其它 JSON 列处理一致）
+    panelLayout: safeParseJson(row.panel_layout_json, row.id, 'panel_layout_json'),
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToProjectPreferenceProfile(row: ProjectPreferenceProfileRow): ProjectPreferenceProfile {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    preferences: safeParseJson(row.preferences_json, row.id, 'preferences_json'),
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -609,6 +711,7 @@ function rowToDraft(row: DraftRow): WritingDraft {
     content: row.content,
     summary: row.summary ?? undefined,
     status: row.status as DraftStatus,
+    version: row.version,
     sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
     linkedProposalViewId: row.linked_proposal_view_id ?? undefined,
     versionGroupId: row.version_group_id ?? undefined,
@@ -662,6 +765,9 @@ function rowToProposalView(row: ProposalViewRow): WritingProposalView {
     projectId: row.project_id,
     sourceDraftId: row.source_draft_id ?? undefined,
     sourceEntitySketchId: row.source_entity_sketch_id ?? undefined,
+    // W14：PV 来源追溯（§4 SourceRef）——记录本 PV 由哪个草案/灵感/蓝图触发，与 sourceDraftId 互补
+    // （sourceDraftId 是结构化 FK，sourceRefs 是可扩展的来源链，可含 idea/blueprint 等多源）
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
     proposalType: row.proposal_type as ProposalType,
     coreProposalId: row.core_proposal_id ?? undefined,
     coreBridgeResult: safeParseJson<unknown>(row.core_bridge_result_json, row.id, 'core_bridge_result_json'),
@@ -670,6 +776,10 @@ function rowToProposalView(row: ProposalViewRow): WritingProposalView {
     factDiff: safeParseJson<FactDiffEntry[]>(row.fact_diff_json, row.id, 'fact_diff_json'),
     involvedEntityIds: safeParseJson<string[]>(row.involved_entity_ids_json, row.id, 'involved_entity_ids_json'),
     ruleWarnings: safeParseJson<RuleWarning[]>(row.rule_warnings_json, row.id, 'rule_warnings_json'),
+    // W9：simulation_inputs_json 可空（实体注册等来源的 PV 无推演输入）
+    simulationInputs: row.simulation_inputs_json
+      ? safeParseJson<SimulationInputs>(row.simulation_inputs_json, row.id, 'simulation_inputs_json')
+      : undefined,
     authorDecision: row.author_decision ?? undefined,
     authorDecisionAt: row.author_decision_at ?? undefined,
     coreEventId: row.core_event_id ?? undefined,
@@ -690,6 +800,8 @@ function rowToAuditLog(row: AuditLogRow): WritingAuditLog {
     triggerSource: row.trigger_source as AuditTrigger,
     result: row.result as AuditResult,
     detail: safeParseJson<unknown>(row.detail_json, row.id, 'detail_json'),
+    // W14：审计来源追溯——记录"本次审计动作由哪个草案/灵感触发"，与 triggerSource（谁触发）互补
+    sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
     errorCode: row.error_code ?? undefined,
     requestId: row.request_id ?? undefined,
     sessionId: row.session_id ?? undefined,
@@ -753,6 +865,18 @@ export class SQLiteWritingStore {
     return this.db;
   }
 
+  /**
+   * 在单一事务内执行多个写操作（better-sqlite3 同步事务）。任一操作抛错则整体回滚。
+   * 用于跨多表的原子性场景——如 ProjectService.createProject §3.1 组合初始化需一次创建
+   * 项目 + 隐式蓝图 + 前提灵感 + 默认布局 + 偏好容器，任一失败不应留下部分创建的悬挂态。
+   * better-sqlite3 的 transaction 支持嵌套（内层用 savepoint），故内部各 create* 方法即便
+   * 自身不显式开事务也安全。
+   */
+  runInTransaction<T>(fn: () => T): T {
+    const txn = this.db.transaction(fn);
+    return txn();
+  }
+
   // =========================================================================
   // writing_projects
   // =========================================================================
@@ -789,6 +913,15 @@ export class SQLiteWritingStore {
   }): void {
     const parts: string[] = [];
     const values: unknown[] = [];
+
+    // 状态机校验：若更新含 status，先查当前状态并 validate（运行时强制，与 draft/entitySketch/proposalView 对齐）
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_projects WHERE id = ?')
+        .get(projectId) as { status: string } | undefined;
+      if (current) {
+        validateProjectTransition(current.status, updates.status, projectId);
+      }
+    }
 
     // 将 camelCase 字段映射到 snake_case 列名
     const fieldMap: Record<string, string> = {
@@ -827,6 +960,9 @@ export class SQLiteWritingStore {
       'writing_proposal_views',
       'writing_core_refs',
       'writing_jobs',
+      // W12 §3.1：1:1 容器表，生命周期跟随项目
+      'writing_workspace_layouts',
+      'writing_project_preferences',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -842,6 +978,131 @@ export class SQLiteWritingStore {
       ).run(projectId);
     });
     txn();
+  }
+
+  // =========================================================================
+  // writing_workspace_layouts（§3.1/§22.1 工作台布局容器，与项目 1:1）
+  // =========================================================================
+
+  /** 创建工作台布局容器（默认空面板布局）。一项目一布局（DDL project_id UNIQUE 约束） */
+  createWorkspaceLayout(projectId: string, panelLayout?: unknown): WorkspaceLayout {
+    const id = makeId(PREFIX.workspace_layout);
+    this.db.prepare(
+      `INSERT INTO writing_workspace_layouts (id, project_id, panel_layout_json)
+       VALUES (?, ?, ?)`
+    ).run(id, projectId, safeStringify(panelLayout ?? {}));
+    return this.getWorkspaceLayout(projectId)!;
+  }
+
+  /** 按项目取工作台布局（1:1，未创建则 undefined） */
+  getWorkspaceLayout(projectId: string): WorkspaceLayout | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_workspace_layouts WHERE project_id = ? AND deleted_at IS NULL'
+    ).get(projectId) as WorkspaceLayoutRow | undefined;
+    return row ? rowToWorkspaceLayout(row) : undefined;
+  }
+
+  /**
+   * 更新工作台布局（乐观锁：expectedVersion 校验并发冲突）。
+   * @throws {WritingError} VERSION_CONFLICT（版本过期）/ WRITING_OBJECT_NOT_FOUND（不存在）
+   */
+  updateWorkspaceLayout(
+    projectId: string,
+    expectedVersion: number,
+    updates: { panelLayout?: unknown },
+  ): { newVersion: number } {
+    const fieldMap: Record<string, string> = { panelLayout: 'panel_layout_json' };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        parts.push(`${col} = ?`);
+        values.push(safeStringify(value));
+      }
+    }
+    // 无字段变更：不写库，版本不推进（无丢失更新风险），直接回显调用方声明的版本
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("updated_at = datetime('now')");
+    parts.push('version = version + 1'); // 乐观锁：每次更新推进版本号
+    // WHERE 同时校验 project_id 与版本：版本不匹配即并发冲突，0 行命中
+    const result = this.db.prepare(
+      `UPDATE writing_workspace_layouts SET ${parts.join(', ')} WHERE project_id = ? AND version = ?`,
+    ).run(...values, projectId, expectedVersion);
+    if (result.changes === 0) {
+      // 0 行命中：要么不存在，要么版本过期——查一次以区分，给出准确错误码
+      const existing = this.getWorkspaceLayout(projectId);
+      if (!existing) {
+        throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到工作台布局: ${projectId}`);
+      }
+      throw new WritingError(
+        WritingErrorCode.VERSION_CONFLICT,
+        `工作台布局版本冲突: 期望 ${expectedVersion}，实际 ${existing.version}`,
+        { expected: expectedVersion, actual: existing.version, projectId },
+      );
+    }
+    return { newVersion: expectedVersion + 1 };
+  }
+
+  // =========================================================================
+  // writing_project_preferences（§3.1 项目级作者偏好容器，与项目 1:1）
+  // =========================================================================
+
+  /** 创建项目级偏好容器（默认空 {}）。一项目一容器（DDL project_id UNIQUE 约束） */
+  createProjectPreferenceProfile(projectId: string, preferences?: unknown): ProjectPreferenceProfile {
+    const id = makeId(PREFIX.project_preference);
+    this.db.prepare(
+      `INSERT INTO writing_project_preferences (id, project_id, preferences_json)
+       VALUES (?, ?, ?)`
+    ).run(id, projectId, safeStringify(preferences ?? {}));
+    return this.getProjectPreferenceProfile(projectId)!;
+  }
+
+  /** 按项目取偏好容器（1:1，未创建则 undefined） */
+  getProjectPreferenceProfile(projectId: string): ProjectPreferenceProfile | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_project_preferences WHERE project_id = ? AND deleted_at IS NULL'
+    ).get(projectId) as ProjectPreferenceProfileRow | undefined;
+    return row ? rowToProjectPreferenceProfile(row) : undefined;
+  }
+
+  /**
+   * 更新项目级偏好容器（乐观锁：expectedVersion 校验并发冲突）。
+   * @throws {WritingError} VERSION_CONFLICT（版本过期）/ WRITING_OBJECT_NOT_FOUND（不存在）
+   */
+  updateProjectPreferenceProfile(
+    projectId: string,
+    expectedVersion: number,
+    updates: { preferences?: unknown },
+  ): { newVersion: number } {
+    const fieldMap: Record<string, string> = { preferences: 'preferences_json' };
+    const parts: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        parts.push(`${col} = ?`);
+        values.push(safeStringify(value));
+      }
+    }
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("updated_at = datetime('now')");
+    parts.push('version = version + 1');
+    const result = this.db.prepare(
+      `UPDATE writing_project_preferences SET ${parts.join(', ')} WHERE project_id = ? AND version = ?`,
+    ).run(...values, projectId, expectedVersion);
+    if (result.changes === 0) {
+      const existing = this.getProjectPreferenceProfile(projectId);
+      if (!existing) {
+        throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到项目偏好容器: ${projectId}`);
+      }
+      throw new WritingError(
+        WritingErrorCode.VERSION_CONFLICT,
+        `项目偏好容器版本冲突: 期望 ${expectedVersion}，实际 ${existing.version}`,
+        { expected: expectedVersion, actual: existing.version, projectId },
+      );
+    }
+    return { newVersion: expectedVersion + 1 };
   }
 
   // =========================================================================
@@ -948,9 +1209,19 @@ export class SQLiteWritingStore {
     };
     const parts: string[] = [];
     const values: unknown[] = [];
+
+    // 状态机校验：若更新含 maturity，先查当前成熟度并 validate（运行时强制）
+    if (updates.maturity !== undefined) {
+      const current = this.db.prepare('SELECT maturity FROM writing_idea_cards WHERE id = ?')
+        .get(ideaId) as { maturity: string } | undefined;
+      if (current) {
+        validateIdeaTransition(current.maturity, updates.maturity, ideaId);
+      }
+    }
+
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        const col = fieldMap[key]; if (!col) throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, `未知更新字段: ${String(key)}`);
         // 数组字段序列化
         parts.push(`${col} = ?`);
         values.push(Array.isArray(value) ? safeStringify(value) : value);
@@ -989,11 +1260,35 @@ export class SQLiteWritingStore {
     return row ? rowToBlueprint(row) : undefined;
   }
 
+  /**
+   * 当前活跃蓝图——【系统真相源】（§6 activeBlueprintId 不变式，见 Phase7-Refinement.md）。
+   *
+   * 按 maturity 派生（'active'|'evolving'，version 降序取最新），绝不读 project.active_blueprint_id
+   * 指针。所有"当前蓝图"判断（DraftService/CoreBridge/CLI /blueprint/Agent）都必须经此方法，
+   * 不允许写 `project.activeBlueprintId ? X : getActiveBlueprint()` 分叉——那会造出与派生真相
+   * 并存的第二条真相，违背世界状态一致性。
+   */
   getActiveBlueprint(projectId: string): ProjectBlueprint | undefined {
     const row = this.db.prepare(
       `SELECT * FROM writing_blueprints
        WHERE project_id = ? AND maturity IN ('active','evolving') AND deleted_at IS NULL
        ORDER BY version DESC LIMIT 1`
+    ).get(projectId) as BlueprintRow | undefined;
+    return row ? rowToBlueprint(row) : undefined;
+  }
+
+  /**
+   * 查询项目的最新蓝图（含 implicit 种子）。
+   *
+   * 与 getActiveBlueprint 的区别：active 只返回 active/evolving；
+   * 此方法还包含 implicit（createProject 建的初始种子），供 /blueprint 命令
+   * 展示"项目已有潜在结构"——即使还没正式激活蓝图。
+   */
+  getLatestBlueprint(projectId: string): ProjectBlueprint | undefined {
+    const row = this.db.prepare(
+      `SELECT * FROM writing_blueprints
+       WHERE project_id = ? AND deleted_at IS NULL
+       ORDER BY CASE maturity WHEN 'active' THEN 0 WHEN 'evolving' THEN 1 ELSE 2 END, version DESC LIMIT 1`
     ).get(projectId) as BlueprintRow | undefined;
     return row ? rowToBlueprint(row) : undefined;
   }
@@ -1005,13 +1300,25 @@ export class SQLiteWritingStore {
     return rows.map(rowToBlueprint);
   }
 
-  updateBlueprint(blueprintId: string, updates: {
-    maturity?: BlueprintMaturity;
-    entityTypes?: BlueprintTypeDef[];
-    relationTypes?: BlueprintTypeDef[];
-    changeSuggestions?: BlueprintChangeSuggestion[];
-    supersededBy?: string | null;
-  }): void {
+  /**
+   * 更新蓝图（乐观锁）
+   *
+   * @param expectedVersion 调用方读取该蓝图时拿到的 version；仅当库中 version 与之一致才写入，
+   *                        写入成功后 version 自动 +1。
+   * @returns 写入后的新版本号（= expectedVersion + 1）
+   * @throws {WritingError} VERSION_CONFLICT（版本过期）/ WRITING_OBJECT_NOT_FOUND（不存在）
+   */
+  updateBlueprint(
+    blueprintId: string,
+    expectedVersion: number,
+    updates: {
+      maturity?: BlueprintMaturity;
+      entityTypes?: BlueprintTypeDef[];
+      relationTypes?: BlueprintTypeDef[];
+      changeSuggestions?: BlueprintChangeSuggestion[];
+      supersededBy?: string | null;
+    },
+  ): { newVersion: number } {
     const fieldMap: Record<string, string> = {
       maturity: 'maturity', entityTypes: 'entity_types_json',
       relationTypes: 'relation_types_json',
@@ -1020,24 +1327,49 @@ export class SQLiteWritingStore {
     };
     const parts: string[] = [];
     const values: unknown[] = [];
+
+    // 状态机校验：若更新含 maturity，先查当前成熟度并 validate（运行时强制）
+    if (updates.maturity !== undefined) {
+      const current = this.db.prepare('SELECT maturity FROM writing_blueprints WHERE id = ? AND version = ?')
+        .get(blueprintId, expectedVersion) as { maturity: string } | undefined;
+      if (current) {
+        validateBlueprintTransition(current.maturity, updates.maturity, blueprintId);
+      }
+    }
+
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        const col = fieldMap[key]; if (!col) throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, `未知更新字段: ${String(key)}`);
         parts.push(`${col} = ?`);
         values.push(Array.isArray(value) ? safeStringify(value) : value);
       }
     }
-    if (parts.length === 0) return;
+    // 无字段变更：不写库，版本不推进（无丢失更新风险），直接回显调用方声明的版本
+    if (parts.length === 0) return { newVersion: expectedVersion };
     parts.push("updated_at = datetime('now')");
-    values.push(blueprintId);
-    this.db.prepare(`UPDATE writing_blueprints SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    parts.push('version = version + 1'); // 乐观锁：每次更新推进版本号
+    // WHERE 同时校验 id 与版本：版本不匹配即并发冲突，0 行命中
+    const result = this.db.prepare(
+      `UPDATE writing_blueprints SET ${parts.join(', ')} WHERE id = ? AND version = ?`,
+    ).run(...values, blueprintId, expectedVersion);
+    if (result.changes === 0) {
+      // 0 行命中：要么不存在，要么版本过期——查一次以区分，给出准确错误码
+      const existing = this.getBlueprint(blueprintId);
+      if (!existing) {
+        throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到蓝图: ${blueprintId}`);
+      }
+      throw new WritingError(
+        WritingErrorCode.VERSION_CONFLICT,
+        `蓝图版本冲突: 期望 ${expectedVersion}，实际 ${existing.version}`,
+        { expected: expectedVersion, actual: existing.version, blueprintId },
+      );
+    }
+    return { newVersion: expectedVersion + 1 };
   }
 
-  supersedeBlueprint(blueprintId: string, newBlueprintId: string): void {
-    this.db.prepare(
-      "UPDATE writing_blueprints SET maturity = 'superseded', superseded_by = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(newBlueprintId, blueprintId);
-  }
+  // supersedeBlueprint 已移除：acceptBlueprintDraft 改用 updateBlueprint（自带乐观锁 version
+  // 守卫 + 推进）在事务内完成 supersede + activate，消除裸 UPDATE 无 version 守卫的隐患。
+  // 原 supersedeBlueprint 无其他调用方（仅 acceptBlueprintDraft 使用），故安全移除。
 
   // =========================================================================
   // writing_drafts
@@ -1077,26 +1409,82 @@ export class SQLiteWritingStore {
     return (this.db.prepare(sql).all(...params) as DraftRow[]).map(rowToDraft);
   }
 
-  updateDraft(draftId: string, updates: {
-    content?: string; summary?: string | null; title?: string | null;
-    chapter?: number; status?: DraftStatus; linkedProposalViewId?: string | null;
-  }): void {
+  /**
+   * 推导项目当前章节（W8）
+   *
+   * Core 的 `project_state.current_chapter` 是规范来源，但无 Core 读工具暴露它——读取它需新增
+   * Core 接口，违背"Phase 7 最小侵入 Core"原则。故从写作层推导：取该项目所有草案（含已提交）
+   * 的最大 chapter，作为"作者已触及的最远章节"。无草案时回落到 1。
+   *
+   * 语义：世界快照需要"as of 哪一章"的视角，草案的 chapter 字段反映了写作进度，取其上界即可。
+   */
+  getCurrentChapter(projectId: string): number {
+    const row = this.db.prepare(
+      'SELECT MAX(chapter) AS max_chapter FROM writing_drafts WHERE project_id = ? AND deleted_at IS NULL',
+    ).get(projectId) as { max_chapter: number | null } | undefined;
+    const max = row?.max_chapter;
+    return typeof max === 'number' && max > 0 ? max : 1;
+  }
+
+  /**
+   * 更新草案（乐观锁）
+   *
+   * @param expectedVersion 调用方读取该草案时拿到的 version；仅当库中 version 与之一致才写入，
+   *                        写入成功后 version 自动 +1。
+   * @returns 写入后的新版本号（= expectedVersion + 1）
+   * @throws {WritingError} VERSION_CONFLICT（版本过期）/ WRITING_OBJECT_NOT_FOUND（不存在）
+   */
+  updateDraft(
+    draftId: string,
+    expectedVersion: number,
+    updates: {
+      content?: string; summary?: string | null; title?: string | null;
+      chapter?: number; status?: DraftStatus; linkedProposalViewId?: string | null;
+    },
+  ): { newVersion: number } {
     const fieldMap: Record<string, string> = {
       content: 'content', summary: 'summary', title: 'title',
       chapter: 'chapter', status: 'status', linkedProposalViewId: 'linked_proposal_view_id',
     };
     const parts: string[] = [];
     const values: unknown[] = [];
+
+    // 状态机校验：若更新含 status，先查当前状态并 validate（运行时强制）
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_drafts WHERE id = ? AND version = ?')
+        .get(draftId, expectedVersion) as { status: string } | undefined;
+      if (current) {
+        validateDraftTransition(current.status, updates.status, draftId);
+      }
+    }
+
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        { const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`); parts.push(`${col} = ?`); }
+        { const col = fieldMap[key]; if (!col) throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, `未知更新字段: ${String(key)}`); parts.push(`${col} = ?`); }
         values.push(value);
       }
     }
-    if (parts.length === 0) return;
+    // 无字段变更：不写库，版本不推进（无丢失更新风险），直接回显调用方声明的版本
+    if (parts.length === 0) return { newVersion: expectedVersion };
     parts.push("updated_at = datetime('now')");
-    values.push(draftId);
-    this.db.prepare(`UPDATE writing_drafts SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    parts.push('version = version + 1'); // 乐观锁：每次更新推进版本号
+    // WHERE 同时校验 id 与版本：版本不匹配即并发冲突，0 行命中
+    const result = this.db.prepare(
+      `UPDATE writing_drafts SET ${parts.join(', ')} WHERE id = ? AND version = ?`,
+    ).run(...values, draftId, expectedVersion);
+    if (result.changes === 0) {
+      // 0 行命中：要么不存在，要么版本过期——查一次以区分，给出准确错误码
+      const existing = this.getDraft(draftId);
+      if (!existing) {
+        throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到草案: ${draftId}`);
+      }
+      throw new WritingError(
+        WritingErrorCode.VERSION_CONFLICT,
+        `草案版本冲突: 期望 ${expectedVersion}，实际 ${existing.version}`,
+        { expected: expectedVersion, actual: existing.version, draftId },
+      );
+    }
+    return { newVersion: expectedVersion + 1 };
   }
 
   // =========================================================================
@@ -1161,9 +1549,19 @@ export class SQLiteWritingStore {
     };
     const parts: string[] = [];
     const values: unknown[] = [];
+
+    // 状态机校验：若更新含 status，先查当前状态并 validate（运行时强制）
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_entity_sketches WHERE id = ?')
+        .get(sketchId) as { status: string } | undefined;
+      if (current) {
+        validateEntitySketchTransition(current.status, updates.status, sketchId);
+      }
+    }
+
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        const col = fieldMap[key]; if (!col) throw new Error(`未知更新字段: ${String(key)}`);
+        const col = fieldMap[key]; if (!col) throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, `未知更新字段: ${String(key)}`);
         parts.push(`${col} = ?`);
         values.push(Array.isArray(value) ? safeStringify(value) : value);
       }
@@ -1174,9 +1572,19 @@ export class SQLiteWritingStore {
     this.db.prepare(`UPDATE writing_entity_sketches SET ${parts.join(', ')} WHERE id = ?`).run(...values);
   }
 
-  /** 合并实体：source 标记为 merged */
+  /**
+   * 合并实体：source 标记为 merged。
+   *
+   * 状态机校验：source 当前状态必须能合法转 merged。EntityService.mergeSketches 在
+   * service 层已做 validateEntitySketchTransition，store 层再校验一次（防御纵深）。
+   */
   mergeEntitySketches(sourceId: string, targetId: string): void {
-    // 合并时将 source 标为 merged
+    void targetId; // target 的别名合并在 updateEntitySketch 单独处理
+    const current = this.db.prepare('SELECT status FROM writing_entity_sketches WHERE id = ?')
+      .get(sourceId) as { status: string } | undefined;
+    if (current) {
+      validateEntitySketchTransition(current.status, 'merged', sourceId);
+    }
     this.db.prepare(
       "UPDATE writing_entity_sketches SET status = 'merged', updated_at = datetime('now') WHERE id = ?"
     ).run(sourceId);
@@ -1228,7 +1636,12 @@ export class SQLiteWritingStore {
        WHERE id = ? AND status = 'open'`
     ).run(status, resolutionNote ?? null, decisionId);
     if (result.changes === 0) {
-      throw new Error(`writing-store: Decision ${decisionId} 不是 open 状态（已被并发处理或已过期）`);
+      // W14：领域状态违规走结构化错误码（INVALID_STATUS_TRANSITION），经 ERROR_RECOVERY_MAP 出人话；
+      // 此前为裸 Error，调用方无法按码分流恢复动作
+      throw new WritingError(
+        WritingErrorCode.INVALID_STATUS_TRANSITION,
+        `writing-store: Decision ${decisionId} 不是 open 状态（已被并发处理或已过期）`,
+      );
     }
   }
 
@@ -1240,13 +1653,15 @@ export class SQLiteWritingStore {
     proposalType: ProposalType;
     sourceDraftId?: string;
     sourceEntitySketchId?: string;
+    sourceRefs?: SourceRef[];
   }): WritingProposalView {
     const id = makeId(PREFIX.proposal_view);
     this.db.prepare(
-      `INSERT INTO writing_proposal_views (id, project_id, proposal_type, source_draft_id, source_entity_sketch_id)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO writing_proposal_views (id, project_id, proposal_type, source_draft_id, source_entity_sketch_id, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?)`
     ).run(id, projectId, params.proposalType,
-      params.sourceDraftId ?? null, params.sourceEntitySketchId ?? null);
+      params.sourceDraftId ?? null, params.sourceEntitySketchId ?? null,
+      safeStringify(params.sourceRefs ?? []));
     return this.getProposalView(id)!;
   }
 
@@ -1271,23 +1686,33 @@ export class SQLiteWritingStore {
     coreProposalId?: string | null; coreBridgeResult?: unknown;
     status?: ProposalViewStatus; humanSummary?: string | null;
     factDiff?: FactDiffEntry[]; involvedEntityIds?: string[];
-    ruleWarnings?: RuleWarning[]; authorDecision?: string | null;
+    ruleWarnings?: RuleWarning[]; simulationInputs?: SimulationInputs; authorDecision?: string | null;
     coreEventId?: string | null; commitError?: unknown | null;
   }): void {
     const fieldMap: Record<string, string> = {
       coreProposalId: 'core_proposal_id', coreBridgeResult: 'core_bridge_result_json',
       status: 'status', humanSummary: 'human_summary',
       factDiff: 'fact_diff_json', involvedEntityIds: 'involved_entity_ids_json',
-      ruleWarnings: 'rule_warnings_json', authorDecision: 'author_decision',
+      ruleWarnings: 'rule_warnings_json', simulationInputs: 'simulation_inputs_json', authorDecision: 'author_decision',
       coreEventId: 'core_event_id', commitError: 'commit_error_json',
     };
     const parts: string[] = [];
     const values: unknown[] = [];
+
+    // 状态机校验：若更新含 status，先查当前状态并 validate（运行时强制，杜绝绕过）
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_proposal_views WHERE id = ?')
+        .get(viewId) as { status: string } | undefined;
+      if (current) {
+        validateProposalViewTransition(current.status, updates.status, viewId);
+      }
+    }
+
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
         // P1-2 修复：未知字段直接报错（杜绝列名注入面），不再回退到原始 key
         const col = fieldMap[key];
-        if (!col) throw new Error(`updateProposalView 未知更新字段: ${String(key)}`);
+        if (!col) throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, `updateProposalView 未知更新字段: ${String(key)}`);
         parts.push(`${col} = ?`);
         // P1-2 修复：null 直接存 SQL NULL，对象/数组才序列化（避免 null → 字符串 "null"）
         values.push(value === null ? null
@@ -1300,10 +1725,16 @@ export class SQLiteWritingStore {
     this.db.prepare(`UPDATE writing_proposal_views SET ${parts.join(', ')} WHERE id = ?`).run(...values);
   }
 
-  /** 来源草案修改导致审核过期 */
+  /**
+   * 来源草案修改导致审核过期。
+   *
+   * 只对 open/author_approved 状态的 PV 过期（这俩状态在 PROPOSAL_VIEW_TRANSITIONS 中
+   * 合法转 expired）。终态（committed/commit_failed/expired/author_rejected）不动——
+   * 它们要么已提交要么已失败，草案修改不该回溯影响。
+   */
   expireProposalView(viewId: string): void {
     this.db.prepare(
-      "UPDATE writing_proposal_views SET status = 'expired', updated_at = datetime('now') WHERE id = ?"
+      "UPDATE writing_proposal_views SET status = 'expired', updated_at = datetime('now') WHERE id = ? AND status IN ('open','author_approved')"
     ).run(viewId);
   }
 
@@ -1317,6 +1748,16 @@ export class SQLiteWritingStore {
     return row ? rowToProposalView(row) : undefined;
   }
 
+  /** 找到某实体草图关联的活跃审核视图（实体类 PV 经 sourceEntitySketchId 关联） */
+  getActiveProposalViewForEntitySketch(sketchId: string): WritingProposalView | undefined {
+    const row = this.db.prepare(
+      `SELECT * FROM writing_proposal_views
+       WHERE source_entity_sketch_id = ? AND status IN ('open','author_approved') AND deleted_at IS NULL
+       ORDER BY created_at DESC LIMIT 1`
+    ).get(sketchId) as ProposalViewRow | undefined;
+    return row ? rowToProposalView(row) : undefined;
+  }
+
   // =========================================================================
   // writing_audit_logs
   // =========================================================================
@@ -1326,15 +1767,17 @@ export class SQLiteWritingStore {
     targetType?: string; targetId?: string;
     triggerSource?: AuditTrigger; result?: AuditResult;
     detail?: unknown; errorCode?: string;
+    sourceRefs?: SourceRef[];
     requestId?: string; sessionId?: string;
   }): WritingAuditLog {
     const id = makeId(PREFIX.audit_log);
     this.db.prepare(
-      `INSERT INTO writing_audit_logs (id, project_id, action, target_type, target_id, trigger_source, result, detail_json, error_code, request_id, session_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO writing_audit_logs (id, project_id, action, target_type, target_id, trigger_source, result, detail_json, source_refs_json, error_code, request_id, session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(id, params.projectId, params.action, params.targetType ?? null, params.targetId ?? null,
       params.triggerSource ?? 'author_action', params.result ?? 'success',
-      safeStringify(params.detail ?? {}), params.errorCode ?? null,
+      safeStringify(params.detail ?? {}), safeStringify(params.sourceRefs ?? []),
+      params.errorCode ?? null,
       params.requestId ?? null, params.sessionId ?? null);
     return this.getAuditLog(id)!;
   }
@@ -1356,6 +1799,29 @@ export class SQLiteWritingStore {
     if (filter?.targetId) { sql += ' AND target_id = ?'; params.push(filter.targetId); }
     sql += ' ORDER BY created_at DESC';
     if (filter?.limit) { sql += ' LIMIT ?'; params.push(filter.limit); }
+    return (this.db.prepare(sql).all(...params) as AuditLogRow[]).map(rowToAuditLog);
+  }
+
+  /**
+   * 列出审计日志（G2 补全，CLI `/audit` 的数据源）
+   *
+   * 与 queryAuditLogs 的区别：新增 `result` 过滤维度（success/failure/partial），
+   * limit 默认 30（CLI-Layer-Design §4.10）。保留 queryAuditLogs 不动以免破坏既有调用方。
+   *
+   * 设计文档：CLI-Layer-Design.md §6 G2（行 333）、§4.10（行 289-295）。
+   */
+  listAuditLogs(projectId: string, filter?: {
+    limit?: number; result?: AuditResult;
+    action?: string; targetType?: string; targetId?: string;
+  }): WritingAuditLog[] {
+    let sql = 'SELECT * FROM writing_audit_logs WHERE project_id = ?';
+    const params: unknown[] = [projectId];
+    if (filter?.result) { sql += ' AND result = ?'; params.push(filter.result); }
+    if (filter?.action) { sql += ' AND action = ?'; params.push(filter.action); }
+    if (filter?.targetType) { sql += ' AND target_type = ?'; params.push(filter.targetType); }
+    if (filter?.targetId) { sql += ' AND target_id = ?'; params.push(filter.targetId); }
+    sql += ' ORDER BY created_at DESC';
+    sql += ' LIMIT ?'; params.push(filter?.limit ?? 30);
     return (this.db.prepare(sql).all(...params) as AuditLogRow[]).map(rowToAuditLog);
   }
 

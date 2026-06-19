@@ -191,10 +191,8 @@ export class ProposalManager {
 
     // ---- 5. 构造 ProposalResult 并存入 ProposalStore ----
     // 读取当前 state_version 作为乐观锁期望值
-    // 读取当前 state_version 作为乐观锁期望值
-    // Phase 1 简化：project_id 硬编码为 'default'
-    // Phase 2 完善：从 ProjectSession 获取 projectId
-    const stateVersion = factStore.getStateVersion('default');
+    // 2026-06-18 修复：不再硬编码 'default'，用 factStore 绑定的项目 ID（每项目独立 db 文件后双保险）
+    const stateVersion = factStore.getStateVersion();
 
     const result: ProposalResult = {
       proposalId,
@@ -275,8 +273,8 @@ export class ProposalManager {
     const chapter = proposedEvent.chapter;
 
     const result = db.transaction(() => {
-      // Step 1: 乐观锁校验
-      const stateUpdated = factStore.tryUpdateStateVersion('default', proposal.expectedStateVersion);
+      // Step 1: 乐观锁校验（用 factStore 绑定的项目 ID，消除 'default' 硬编码）
+      const stateUpdated = factStore.tryUpdateStateVersion(undefined, proposal.expectedStateVersion);
       if (!stateUpdated) {
         throw new Error('STALE_PROPOSAL: 世界状态已变更，请重新执行 propose_event');
       }

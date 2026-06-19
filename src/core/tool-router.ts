@@ -50,6 +50,32 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
       },
     },
 
+    // Tool 1b: detect_entity_hints（写作层实体检测——从正文/设定提取实体线索，建 hint 草图）
+    detect_entity_hints: {
+      name: 'detect_entity_hints',
+      description: '从正文/设定中提取实体线索，创建候选实体草图（hint 状态）。每个 hint 需提供显示名和类型（如"角色"/"地点"/"物品"/"概念"）。这是注册实体的第一步——提取后系统会生成 hint 供作者审批，不要在回复中直接声称实体"已注册"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          hints: {
+            type: 'array',
+            description: '提取到的实体线索列表（至少 1 个）',
+            items: {
+              type: 'object',
+              properties: {
+                display_name: { type: 'string', description: '实体显示名（如"沈墨"）' },
+                type_label: { type: 'string', description: '类型标签：角色/地点/物品/概念/组织 等' },
+                excerpt: { type: 'string', description: '正文中提及该实体的摘录（可选，用于追溯）' },
+              },
+              required: ['display_name', 'type_label'],
+            },
+            minItems: 1,
+          },
+        },
+        required: ['hints'],
+      },
+    },
+
     // Tool 2: propose_event
     propose_event: {
       name: 'propose_event',
@@ -286,6 +312,25 @@ export class ToolRouter {
   private knowledgeStore: KnowledgeStore;
   private eventStore: EventStore;
   private threadStore: ThreadStore;
+  /**
+   * 写作层实体检测服务（可选注入）。
+   * detect_entity_hints 工具需要它。Core 层不硬依赖写作层（避免循环），
+   * 用宽结构化类型（返回值不约束——EntityService 返回更具体的 WritingEntitySketch[] 兼容）。
+   * 未注入时 detect_entity_hints 工具返回 INTERNAL_ERROR。
+   *
+   * 用 setter 延迟注入（chat.ts 里 ToolRouter 先于 entityService 创建，
+   * 因 coreBridge→toolRouter 与 entityService→workflowService 存在依赖顺序）。
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private entityService: { detectEntityHints: (ctx: any, hints: Array<{ displayName: string; typeLabel: string; excerpt?: string }>) => any } | undefined;
+  private writingProjectId: string | undefined;
+
+  /** 延迟注入写作层实体检测服务（chat.ts 在 entityService 创建后调用） */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setEntityService(svc: { detectEntityHints: (ctx: any, hints: Array<{ displayName: string; typeLabel: string; excerpt?: string }>) => any }, writingProjectId: string): void {
+    this.entityService = svc;
+    this.writingProjectId = writingProjectId;
+  }
   // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
 
   constructor(deps: {
@@ -297,6 +342,9 @@ export class ToolRouter {
     knowledgeStore: KnowledgeStore;
     eventStore: EventStore;
     threadStore: ThreadStore;
+    // 写作层可选注入（实体检测工具需要；Core 层不硬依赖写作层）
+    entityService?: { detectEntityHints: (ctx: unknown, hints: Array<{ displayName: string; typeLabel: string; excerpt?: string }>) => unknown[] };
+    writingProjectId?: string;
   }) {
     this.proposalManager = deps.proposalManager;
     this.retconEngine = deps.retconEngine;
@@ -306,6 +354,8 @@ export class ToolRouter {
     this.knowledgeStore = deps.knowledgeStore;
     this.eventStore = deps.eventStore;
     this.threadStore = deps.threadStore;
+    this.entityService = deps.entityService;
+    this.writingProjectId = deps.writingProjectId;
   }
 
   // =========================================================================
@@ -323,6 +373,7 @@ export class ToolRouter {
     try {
       switch (toolName) {
         case 'get_context_slice':       return await this.handleGetContextSlice(params);
+        case 'detect_entity_hints':     return await this.handleDetectEntityHints(params);
         case 'propose_event':           return await this.handleProposeEvent(params);
         case 'commit_event':            return await this.handleCommitEvent(params);
         case 'propose_retcon':          return await this.handleProposeRetcon(params);
@@ -364,7 +415,7 @@ export class ToolRouter {
   /** 返回所有 Tool 名称列表 */
   toolNames(): string[] {
     return [
-      'get_context_slice', 'propose_event', 'commit_event',
+      'get_context_slice', 'detect_entity_hints', 'propose_event', 'commit_event',
       'propose_retcon', 'commit_retcon', 'resolve_thread',
       'get_open_threads', 'register_entity',
       'propose_schema_extension', 'commit_schema_extension',
@@ -389,6 +440,71 @@ export class ToolRouter {
     });
 
     return this.ok(result);
+  }
+
+  // =========================================================================
+  // Tool 1b: detect_entity_hints（写作层实体检测）
+  // =========================================================================
+
+  private async handleDetectEntityHints(params: Record<string, unknown>) {
+    // 守卫：entityService 必须注入（CLI 装配时传入；无写作层的纯 Core 测试不注入）
+    if (!this.entityService || !this.writingProjectId) {
+      return this.error(
+        ToolErrorCode.INTERNAL_ERROR,
+        '实体检测服务未配置（写作层未注入）',
+        false,
+        '此工具仅在写作层 CLI 环境可用。',
+      );
+    }
+
+    const rawHints = params['hints'];
+    if (!Array.isArray(rawHints) || rawHints.length === 0) {
+      return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'hints 必须是非空数组', false, '请提供至少一个实体线索。');
+    }
+
+    // snake_case → camelCase 映射 + 校验
+    const hints: Array<{ displayName: string; typeLabel: string; excerpt?: string }> = [];
+    for (let i = 0; i < rawHints.length; i++) {
+      const h = rawHints[i] as Record<string, unknown>;
+      const displayName = h['display_name'];
+      const typeLabel = h['type_label'];
+      if (typeof displayName !== 'string' || displayName.trim().length === 0) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, `hints[${i}].display_name 必须是非空字符串`, false);
+      }
+      if (typeof typeLabel !== 'string' || typeLabel.trim().length === 0) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, `hints[${i}].type_label 必须是非空字符串`, false);
+      }
+      hints.push({
+        displayName: displayName.trim(),
+        typeLabel: typeLabel.trim(),
+        excerpt: typeof h['excerpt'] === 'string' ? h['excerpt'] : undefined,
+      });
+    }
+
+    // 构造完整 ctx（detectEntityHints 用到 projectId/sourceRefs/requestId/authorId/trigger 等）。
+    // Core 层不依赖写作层 makeRequestContext，内联构造等价对象。
+    const ctx = {
+      projectId: this.writingProjectId,
+      requestId: `tool_detect_${Date.now()}`,
+      authorId: 'default',
+      sessionId: `tool_session`,
+      trigger: 'agent_suggestion',
+      sourceRefs: [],
+    } as unknown as Parameters<typeof this.entityService.detectEntityHints>[0];
+
+    const sketches = this.entityService.detectEntityHints(ctx, hints);
+
+    return this.ok({
+      detected: sketches.length,
+      hints: (sketches as Array<{ id: string; displayName: string; typeLabel: string; status: string; duplicateSuspected?: boolean }>).map(s => ({
+        id: s.id,
+        displayName: s.displayName,
+        typeLabel: s.typeLabel,
+        status: s.status,
+        duplicateSuspected: s.duplicateSuspected,
+      })),
+      message: `已创建 ${sketches.length} 个实体线索（hint 状态）。用 /entities 查看，/entity approve <id> 批准后注册到 Core。`,
+    });
   }
 
   // =========================================================================

@@ -8,7 +8,7 @@
 //   - 外键约束：启用 FOREIGN KEY，保证引用完整性
 //   - 原子事务：applyFactGroup 使用 SAVEPOINT 实现组内局部回滚
 //   - 序列化隔离：read → deserialize → write → serialize，保证类型安全
-//   - ID 生成：assert 方法自动生成 Fact ID（遵循 fct_{type}_{chapter}_{seq} 规则）
+//   - ID 生成：assert 方法自动生成 Fact ID（fct_{完整事件标识}_{seq}，事件标识取自 causeEvent 去前缀）
 //   - embeddingText 生成：由上游 FactEmbedder 负责，本层只存储
 //
 // 与架构文档的对应关系：
@@ -286,14 +286,23 @@ CREATE TABLE IF NOT EXISTS wp_scope_presets (
 
 export class SQLiteFactStoreAdapter implements FactStore {
   private db: Database.Database;
-  // P1-1 修复：Fact 序号改为 DB COUNT 查询（见 assert 方法），不再持有内存计数器。
+  /**
+   * 该 factStore 绑定的项目 ID（状态版本乐观锁的 key）。
+   *
+   * 2026-06-18 修复：此前构造接收 projectId 但只用于初始化 project_state 行就丢弃，
+   * 导致 Core 层（proposal-manager/retcon-engine）写死 'default' 调 getStateVersion/tryUpdateStateVersion。
+   * 现在存为字段，Core 层经 getProjectId() 取真实项目 ID，消除硬编码（每项目独立 db 文件后双保险）。
+   */
+  private readonly projectId: string;
+  // P1-1 修复：Fact 序列改为 DB COUNT 查询（见 assert 方法），不再持有内存计数器。
   // 原内存 Map 在进程重启后清空；若为已存在事件重新 assert 会生成重复 factId 触发主键冲突。
 
   /**
    * @param dbPath   数据库文件路径，或 ':memory:' 用于内存数据库
-   * @param projectId 项目 ID，用于初始化 project_state
+   * @param projectId 项目 ID，用于初始化 project_state 与状态版本乐观锁
    */
   constructor(dbPath: string, projectId: string = 'default') {
+    this.projectId = projectId;
     // 创建数据库连接并启用 WAL 模式
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
@@ -332,13 +341,22 @@ export class SQLiteFactStoreAdapter implements FactStore {
   assert(fact: Omit<Fact, 'id' | 'embeddingText'>): Fact {
     const { valueType, scalarType, textValue } = this.serializeFactValue(fact.value);
 
-    // 生成 Fact ID：fct_{type}_{chapter}_{seq}
-    // 需要从 causeEvent 中提取 type 和 chapter
-    // 例如 evt_tribulation_50 → type=tribulation, chapter=50
-    const eventParts = fact.causeEvent.replace('evt_', '').split('_');
-    const eventType = eventParts[0] ?? 'unknown';
-    const chapter = eventParts[1] ?? '0';
-    const eventSeq = eventParts.length > 2 ? eventParts[2] : undefined;
+    // 生成 Fact ID：fct_{完整事件标识}_{seq}
+    // 用 causeEvent 去掉 evt_ 前缀后的【完整】字符串作为 Fact ID 前缀，保证不同事件
+    // 产生的 Fact ID 永不冲突。
+    //
+    // P1-1b 修复（2026-06-14，writing-loop 场景 B/E 根因）：
+    // 此前按 split('_') 取 [0..2] 拼接（type/chapter/seq），对多词事件类型会误解析——
+    // evt_character_intro_1_03 被切成 ['character','intro','1','03']，eventSeq 只取到 '1'，
+    // 末尾真正区分事件的全局序号 '03' 被丢弃。于是同一族事件 evt_character_intro_1_03 与
+    // evt_character_intro_1_05 会生成完全相同的 fct_character_intro_1_01，命中 facts.id 的
+    // UNIQUE 约束，第二次 commit_event 直接失败（抛 UNIQUE constraint failed: facts.id）。
+    // 这不是 LLM / 超时问题，而是确定性的 ID 生成缺陷。
+    //
+    // 改用完整 eventTag 后：fct_character_intro_1_03_01 与 fct_character_intro_1_05_01 天然不同；
+    // 单词类型同样兼容——evt_tribulation_50 → fct_tribulation_50_01（与旧格式逐字一致）。
+    // knowledge-store.generateId 把 factRef 当不透明串处理（自带 seq 去重），不解析其内部结构，故无影响。
+    const eventTag = fact.causeEvent.replace(/^evt_/, '');
 
     // P1-1 修复：Fact 序号从 DB 持久化查询，消除内存计数器依赖
     // 事务内多次 assert 可见同事务的 INSERT，COUNT 自然递增；
@@ -348,13 +366,8 @@ export class SQLiteFactStoreAdapter implements FactStore {
     ).get(fact.causeEvent) as { cnt: number }).cnt;
     const nextSeq = existingCount + 1;
 
-    // 构造 Fact ID
-    let factId: string;
-    if (eventSeq) {
-      factId = `fct_${eventType}_${chapter}_${eventSeq}_${String(nextSeq).padStart(2, '0')}`;
-    } else {
-      factId = `fct_${eventType}_${chapter}_${String(nextSeq).padStart(2, '0')}`;
-    }
+    // 构造 Fact ID：eventTag 含完整事件标识（含全局序号），nextSeq 保证同事件内 Fact 唯一
+    const factId = `fct_${eventTag}_${String(nextSeq).padStart(2, '0')}`;
 
     // embeddingText 由 assert 内部生成（架构 §2214：FactEmbedder 在 assert 内部生成；
     // 接口签名 Omit<Fact,'id'|'embeddingText'> 不接收外部传入）。
@@ -685,6 +698,18 @@ export class SQLiteFactStoreAdapter implements FactStore {
   }
 
   /**
+   * 检查实体是否已在 entities 表注册。
+   *
+   * witness_propagation 遍历 location fact 的 subject 作 witness 时，必须过滤掉未注册的 subject，
+   * 否则产生的 knowledge 行 entity_id 违反外键约束导致 commit_event 回滚（FOREIGN KEY failed）。
+   * 此前纯 service 路径 register+simulate+commit 总失败、Agent 路径成功的根因即此。
+   */
+  entityExists(entityId: string): boolean {
+    const row = this.db.prepare('SELECT 1 FROM entities WHERE id = ?').get(entityId);
+    return row !== undefined;
+  }
+
+  /**
    * 查询所有指向某实体的关系 Fact（反向查询）
    */
   getRelationsTargeting(entityId: string, atChapter?: number): Fact[] {
@@ -716,8 +741,14 @@ export class SQLiteFactStoreAdapter implements FactStore {
    *
    * Event Sourcing 原则：不 DELETE，只 UPDATE certainty 字段。
    * contested Fact 保持 is_current=true —— 它仍是"当前"状态，只是确定性被质疑。
+   *
+   * 注：causeEvent 参数当前未写入 facts 表（无 contest_cause 列）。
+   * Retcon 的因果溯源（哪个 retcon 事件标记了哪些 fact）经 event_dependencies 表建立——
+   * retcon-engine.ts 在 markContested 后单独 INSERT event_dependencies。此参数保留供
+   * 未来若需在 facts 行直接记录 contest 因果（避免 JOIN event_dependencies 查询）。
    */
   markContested(factIds: string[], causeEvent: string): number {
+    void causeEvent; // 当前未使用（因果经 event_dependencies），保留参数避免接口变更
     if (factIds.length === 0) return 0;
 
     const placeholders = factIds.map(() => '?').join(',');
@@ -791,25 +822,38 @@ export class SQLiteFactStoreAdapter implements FactStore {
   }
 
   /**
-   * 获取项目当前乐观锁版本号（供 commit_event Phase B 使用）
+   * 返回该 factStore 绑定的项目 ID（Core 层状态版本乐观锁的 key）。
+   *
+   * Core 层（proposal-manager/retcon-engine）经此方法取真实项目 ID，
+   * 消除硬编码 'default'（每项目独立 db 文件后双保险）。
    */
-  getStateVersion(projectId: string): number {
+  getProjectId(): string {
+    return this.projectId;
+  }
+
+  /**
+   * 获取项目当前乐观锁版本号（供 commit_event Phase B 使用）。
+   *
+   * @param projectId 可选；省略时用 factStore 绑定的项目 ID（消除 Core 层硬编码）
+   */
+  getStateVersion(projectId?: string): number {
     const row = this.db.prepare(
       'SELECT state_version FROM project_state WHERE project_id = ?'
-    ).get(projectId) as { state_version: number } | undefined;
+    ).get(projectId ?? this.projectId) as { state_version: number } | undefined;
     return row?.state_version ?? 0;
   }
 
   /**
-   * 条件更新乐观锁版本号（Phase B 第一步）
+   * 条件更新乐观锁版本号（Phase B 第一步）。
    *
+   * @param projectId 可选；省略时用 factStore 绑定的项目 ID
    * @returns 更新行数（0 = 版本冲突，1 = 成功）
    */
-  tryUpdateStateVersion(projectId: string, expectedVersion: number): boolean {
+  tryUpdateStateVersion(projectId: string | undefined, expectedVersion: number): boolean {
     const result = this.db.prepare(
       `UPDATE project_state SET state_version = state_version + 1, updated_at = datetime('now')
        WHERE project_id = ? AND state_version = ?`
-    ).run(projectId, expectedVersion);
+    ).run(projectId ?? this.projectId, expectedVersion);
     return result.changes === 1;
   }
 }

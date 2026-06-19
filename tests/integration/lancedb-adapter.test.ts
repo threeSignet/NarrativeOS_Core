@@ -11,6 +11,10 @@ import { SiliconFlowEmbeddingService } from '../../src/adapters/embedding/silico
 import { tmpdir } from 'os';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
+
+// 守卫：无 EMBEDDING_API_KEY 时 skip 而非 fail（add 需要 embedder）
+const HAS_KEY = !!process.env['EMBEDDING_API_KEY'];
+const describeIf = HAS_KEY ? describe : describe.skip;
 import type { VectorEntry } from '../../src/types.js';
 
 let tempDir: string;
@@ -37,7 +41,7 @@ async function makeEntry(id: string, subject: string, predicate: string, text: s
   };
 }
 
-describe('LanceDBTableAdapter', () => {
+describeIf('LanceDBTableAdapter', () => {
   it('init() 后表应可写入和计数', async () => {
     const entry = await makeEntry('fct_test_1', 'ent_zhangsan', 'realm', '张三修炼金丹期');
     await store.add([entry]);

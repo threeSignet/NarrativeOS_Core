@@ -9,7 +9,8 @@
 //   - approveCandidate 批准候选，自动创建 PendingDecision（副作用）
 //   - deprecateEntitySketch 废弃实体草图（已注册实体需走 Retcon）
 //   - mergeSketches 合并候选实体（已注册的不能合并）
-//   - _markRegistered / _markRegistrationFailed 内部方法，CoreBridge 专用
+//   - 注册回写（registered/error）由 RealCoreBridge.registerReviewedEntity 内化完成，
+//     不再在本服务暴露 _mark* 方法（避免 Agent 经 service 绕过审核置终态）
 //
 // 对应设计文档：Phase7-Refinement.md §7.6
 // =============================================================================
@@ -25,6 +26,7 @@ import type {
 import type { SourceRef } from '../models/source-ref.js';
 import { makeRequestContext } from './context.js';
 import { validateEntitySketchTransition } from '../models/state-machine.js';
+import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
 
 export class EntityService {
   private store: SQLiteWritingStore;
@@ -52,6 +54,9 @@ export class EntityService {
    *
    * 此方法接收 Agent 已经提取好的实体名称和类型，创建 hint 草图。
    * 实际的 NLP 实体提取由 Agent 在 ReAct 循环中完成。
+   *
+   * §7.6 主流程3：返回值在 WritingEntitySketch 上附加 duplicateSuspected 派生标记——
+   * 已存在同名（candidate/approved/registered）实体时为 true，但状态仍保持 'hint'（不阻止创建，由作者决定合并）。
    */
   detectEntityHints(
     ctx: WritingRequestContext,
@@ -60,11 +65,14 @@ export class EntityService {
       typeLabel: string;
       excerpt?: string;
     }>,
-  ): WritingEntitySketch[] {
-    const results: WritingEntitySketch[] = [];
+    // §7.6 返回类型用交叉类型而非给 WritingEntitySketch 加字段：duplicateSuspected 是运行时派生（查重结果），
+    // 不属持久化模型——加到行类型会污染 DDL/Row 映射（无对应列、无写入方），交叉类型让标记只在内存对象上流转。
+  ): Array<WritingEntitySketch & { duplicateSuspected: boolean }> {
+    const results: Array<WritingEntitySketch & { duplicateSuspected: boolean }> = [];
+    let duplicateSuspectedCount = 0;
 
     for (const hint of hints) {
-      // 查重检测
+      // §7.6 主流程3 查重检测：已有同名 candidate/approved/registered → 标记 duplicate_suspected
       const duplicates = this.store.findEntitySketchesByName(
         ctx.projectId,
         hint.displayName,
@@ -72,6 +80,7 @@ export class EntityService {
       const hasDuplicates = duplicates.filter(
         d => d.status === 'candidate' || d.status === 'approved' || d.status === 'registered',
       ).length > 0;
+      if (hasDuplicates) duplicateSuspectedCount++;
 
       const sketch = this.store.createEntitySketch(ctx.projectId, {
         displayName: hint.displayName,
@@ -87,22 +96,16 @@ export class EntityService {
         ],
       });
 
-      results.push(sketch);
-
-      if (hasDuplicates) {
-        this.audit.record(ctx, {
-          action: 'detect_entity_hints',
-          targetType: 'entity_sketch',
-          targetId: sketch.id,
-          detail: { duplicateSuspected: true, displayName: hint.displayName },
-        });
-      }
+      // §7.6：状态保持 'hint'，返回值附加 duplicateSuspected 标记（spread sketch + 派生字段）
+      results.push({ ...sketch, duplicateSuspected: hasDuplicates });
     }
 
+    // §7.6 副作用4：只记一条汇总审计（契约明示「不逐个记录，太多噪音」）。
+    // duplicateSuspectedCount 进汇总以保留可观测性，替代此前逐条 per-hint duplicate 审计。
     if (results.length > 0) {
       this.audit.record(ctx, {
         action: 'detect_entity_hints',
-        detail: { count: results.length },
+        detail: { count: results.length, duplicateSuspectedCount },
       });
     }
 
@@ -123,12 +126,14 @@ export class EntityService {
     },
   ): WritingEntitySketch {
     const sketch = this.store.getEntitySketch(hintId);
-    if (!sketch) throw new Error(`找不到实体草图: ${hintId}`);
+    if (!sketch) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到实体草图: ${hintId}`, { objectType: 'entity_sketch', objectId: hintId });
 
     // 状态机校验
     if (sketch.status !== 'hint') {
-      throw new Error(
+      throw new WritingError(
+        WritingErrorCode.INVALID_STATUS_TRANSITION,
         `实体状态 "${sketch.status}" 不能转为候选（需要 "hint"）`,
+        { currentStatus: sketch.status, attemptedAction: 'promoteToCandidate' },
       );
     }
 
@@ -170,12 +175,14 @@ export class EntityService {
     sketchId: string,
   ): WritingEntitySketch {
     const sketch = this.store.getEntitySketch(sketchId);
-    if (!sketch) throw new Error(`找不到实体草图: ${sketchId}`);
+    if (!sketch) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到实体草图: ${sketchId}`, { objectType: 'entity_sketch', objectId: sketchId });
 
     // 状态机校验
     if (sketch.status !== 'candidate') {
-      throw new Error(
+      throw new WritingError(
+        WritingErrorCode.INVALID_STATUS_TRANSITION,
         `实体状态 "${sketch.status}" 不能批准（需要 "candidate"）`,
+        { currentStatus: sketch.status, attemptedAction: 'approve' },
       );
     }
 
@@ -185,8 +192,10 @@ export class EntityService {
       sketch.displayName,
     ).filter(d => d.id !== sketchId && d.status === 'registered');
     if (registeredDup.length > 0) {
-      throw new Error(
+      throw new WritingError(
+        WritingErrorCode.DUPLICATE_ENTITY_CANDIDATE,
         `已存在同名已注册实体 "${sketch.displayName}"，请改用合并而非重复登记`,
+        { displayName: sketch.displayName },
       );
     }
 
@@ -234,17 +243,42 @@ export class EntityService {
     reason?: string,
   ): void {
     const sketch = this.store.getEntitySketch(sketchId);
-    if (!sketch) throw new Error(`找不到实体草图: ${sketchId}`);
+    if (!sketch) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到实体草图: ${sketchId}`, { objectType: 'entity_sketch', objectId: sketchId });
 
     // 已注册实体需走 Retcon
     if (sketch.status === 'registered') {
-      throw new Error('已注册实体不能直接废弃。如需修改，请使用 Retcon 通道。');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '已注册实体不能直接废弃。如需修改，请使用 Retcon 通道。', { currentStatus: 'registered', attemptedAction: 'deprecate' });
     }
     if (sketch.status === 'merged') {
-      throw new Error('已合并的实体是终态，不能废弃');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '已合并的实体是终态，不能废弃', { currentStatus: 'merged', attemptedAction: 'deprecate' });
     }
 
     this.store.updateEntitySketch(sketchId, { status: 'deprecated' });
+
+    // §7.6 主流程4：废弃实体草图时，expire 此实体关联的活跃审核视图 + PendingDecision。
+    // 与 abandonDraft expire 草案类 PV 对称——避免悬挂的审核/决策指向已废弃实体。
+    const activePV = this.store.getActiveProposalViewForEntitySketch(sketchId);
+    if (activePV) {
+      this.store.expireProposalView(activePV.id);
+      // 同步 expire 关联的 PendingDecision（按 linkedObjectId === pv.id 匹配，与 abandonDraft 一致）
+      const decisions = this.store.listPendingDecisions(ctx.projectId);
+      for (const d of decisions) {
+        if (d.linkedObjectId === activePV.id && d.linkedObjectType === 'proposal_view') {
+          try {
+            this.store.resolveDecision(d.id, 'expired', '实体草图已废弃');
+          } catch {
+            // 决策可能已被并发处理或过期，忽略（与 abandonDraft 一致的并发容忍）
+          }
+        }
+      }
+      // 记 expire 审计——废弃实体导致的 PV 过期留下可观测痕迹（便于排查"为何此 PV 过期"）
+      this.audit.record(ctx, {
+        action: 'expire_proposal_view',
+        targetType: 'proposal_view',
+        targetId: activePV.id,
+        detail: { reason: 'entity_sketch_deprecated', sketchId },
+      });
+    }
 
     this.audit.record(ctx, {
       action: 'deprecate_entity',
@@ -268,28 +302,28 @@ export class EntityService {
     targetId: string,
   ): void {
     if (sourceId === targetId) {
-      throw new Error('不能合并同一个实体');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '不能合并同一个实体', { attemptedAction: 'mergeSelf' });
     }
 
     const source = this.store.getEntitySketch(sourceId);
-    if (!source) throw new Error(`找不到源实体: ${sourceId}`);
+    if (!source) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到源实体: ${sourceId}`, { objectType: 'entity_sketch', objectId: sourceId });
 
     const target = this.store.getEntitySketch(targetId);
-    if (!target) throw new Error(`找不到目标实体: ${targetId}`);
+    if (!target) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到目标实体: ${targetId}`, { objectType: 'entity_sketch', objectId: targetId });
 
     // 校验目标实体状态：不能合并到已合并或已废弃的实体
     if (target.status === 'merged') {
-      throw new Error('目标实体已被合并，不能作为合并目标');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '目标实体已被合并，不能作为合并目标', { currentStatus: target.status, attemptedAction: 'mergeAsTarget' });
     }
     if (target.status === 'deprecated') {
-      throw new Error('目标实体已废弃，不能作为合并目标');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '目标实体已废弃，不能作为合并目标', { currentStatus: target.status, attemptedAction: 'mergeAsTarget' });
     }
 
     // P1-3 修复：源实体→merged 由状态机单一真相源裁决
     // （ENTITY_SKETCH_TRANSITIONS 仅允许 candidate→merged；hint/approved/registered/merged 均被拒）
     if (source.status === 'registered') {
       // registered 已被 Core 引用，保留 Retcon 友好提示（表 registered:[] 同样会拒，但消息需引导至 Retcon）
-      throw new Error('已注册实体不能合并。如需合并已注册实体，请使用 Retcon 通道。');
+      throw new WritingError(WritingErrorCode.INVALID_STATUS_TRANSITION, '已注册实体不能合并。如需合并已注册实体，请使用 Retcon 通道。', { currentStatus: source.status, attemptedAction: 'mergeSource' });
     }
     validateEntitySketchTransition(source.status, 'merged', sourceId);
 
@@ -300,40 +334,25 @@ export class EntityService {
       ...source.aliases.filter(a => a !== source.displayName),
     ];
 
-    this.store.updateEntitySketch(targetId, { aliases: mergedAliases });
-    this.store.mergeEntitySketches(sourceId, targetId);
-
-    this.audit.record(ctx, {
-      action: 'merge_entities',
-      detail: { sourceId, targetId },
+    // 原子性：两写（target 别名更新 + source 标 merged）必须同生共死——若 mergeEntitySketches
+    // 在 updateEntitySketch 之后失败，target 别名已改而 source 未合并，留下"半合并"的部分态
+    // （target 凭空多出别名、source 仍可被引用）。包入 runInTransaction（savepoint 嵌套，与
+    // acceptBlueprintDraft P0-4 同范式）保证两者全成或全回滚。audit 一并纳入（AuditService.record
+    // 内部 try/catch 吞自身异常，不会因审计失败误回滚数据写）。
+    this.store.runInTransaction(() => {
+      this.store.updateEntitySketch(targetId, { aliases: mergedAliases });
+      this.store.mergeEntitySketches(sourceId, targetId);
+      this.audit.record(ctx, {
+        action: 'merge_entities',
+        detail: { sourceId, targetId },
+      });
     });
   }
 
-  // =========================================================================
-  // 内部方法（CoreBridge 专用，Agent 禁止调用）
-  // =========================================================================
-
-  /**
-   * CoreBridge 注册成功后回写
-   *
-   * @internal — 仅 CoreBridge 调用
-   */
-  private _markRegistered(sketchId: string, coreEntityId: string, coreKind: string): void {
-    this.store.updateEntitySketch(sketchId, {
-      status: 'registered',
-      coreEntityId,
-      coreKind,
-    });
-  }
-
-  /**
-   * CoreBridge 注册失败后回写
-   *
-   * @internal — 仅 CoreBridge 调用
-   */
-  private _markRegistrationFailed(sketchId: string, _error: unknown): void {
-    this.store.updateEntitySketch(sketchId, { status: 'error' });
-  }
+  // 注：CoreBridge 注册成功/失败后的草图状态回写已内化于 RealCoreBridge
+  // （registerReviewedEntity 内直接更新 writing_entity_sketches，并落地审计）。
+  // 早期设计 §7.7 规划的 _markRegistered / _markRegistrationFailed 内部方法已移除——
+  // 它们是 private 且无任何调用方（跨类无法调用 private，设计自相矛盾），属确认的死代码。
 
   // =========================================================================
   // Query
@@ -362,7 +381,7 @@ export class EntityService {
    */
   getEntitySketch(ctx: WritingRequestContext, sketchId: string): WritingEntitySketch {
     const sketch = this.store.getEntitySketch(sketchId);
-    if (!sketch) throw new Error(`找不到实体草图: ${sketchId}`);
+    if (!sketch) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到实体草图: ${sketchId}`, { objectType: 'entity_sketch', objectId: sketchId });
     return sketch;
   }
 }

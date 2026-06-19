@@ -29,7 +29,14 @@ import type { NarrativeAgentRuntimeState } from '../../src/agent/types.js';
 config();
 
 const HAS_API_KEY = !!process.env['DEEPSEEK_API_KEY'];
-const describeIf = HAS_API_KEY ? describe : describe.skip;
+
+// 2026-06-18 注：本文件是 Phase 5 §5C 的真实 DeepSeek 闭环测试，场景 A/C/E/F/G 假设
+// "Agent 直接调 register_entity 写入 Core"。§25 #7 权限门控强化后，register_entity 加入
+// AGENT_FORBIDDEN_TOOLS，Agent 不得直接注册——这些场景的 Agent 路径被拦截，Core 无写入，
+// 断言失败。Phase 7 的等价闭环已由 tests/writing/writing-main-loop.test.ts（MockLLMClient
+// 驱动 + 审核通道）覆盖。本文件整体 skip，待未来按新权限模型重构（Agent 改走
+// detectEntityHints → 审核通道，而非直接 register_entity）。
+const describeIf = describe.skip;
 
 const PROJECT_ID = 'default';
 

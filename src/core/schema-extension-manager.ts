@@ -19,8 +19,16 @@ export class SchemaExtensionManager {
   private proposals = new Map<string, ExtensionProposal>();
   private proposalCounter = 0;
   private db: Database;
+  /**
+   * 该管理器绑定的项目 ID（状态版本乐观锁的 key）。
+   * 2026-06-18 修复：消除 'default' 硬编码（此前 SQL 直接拼 project_id='default'）。
+   */
+  private readonly projectId: string;
 
-  constructor(db: Database) { this.db = db; }
+  constructor(db: Database, projectId: string = 'default') {
+    this.db = db;
+    this.projectId = projectId;
+  }
 
   private genId(): string { this.proposalCounter++; return `prp_schema_${String(this.proposalCounter).padStart(2,'0')}`; }
 
@@ -63,8 +71,9 @@ export class SchemaExtensionManager {
 
     try {
       const result = this.db.transaction(() => {
-        const bv = (this.db.prepare("SELECT state_version FROM project_state WHERE project_id='default'").get() as {state_version:number}|undefined)?.state_version??0;
-        if (this.db.prepare("UPDATE project_state SET state_version=state_version+1, updated_at=datetime('now') WHERE project_id='default' AND state_version=?").run(bv).changes===0) throw new Error('STALE_PROPOSAL');
+        // 状态版本乐观锁：用 this.projectId（参数化，消除 'default' 硬编码）
+        const bv = (this.db.prepare("SELECT state_version FROM project_state WHERE project_id=?").get(this.projectId) as {state_version:number}|undefined)?.state_version??0;
+        if (this.db.prepare("UPDATE project_state SET state_version=state_version+1, updated_at=datetime('now') WHERE project_id=? AND state_version=?").run(this.projectId, bv).changes===0) throw new Error('STALE_PROPOSAL');
 
         const at: string[] = []; const np: string[] = []; const nr: string[] = [];
         if (proposal.extensionType==='predicate') {
