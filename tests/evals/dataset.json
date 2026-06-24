@@ -1,0 +1,202 @@
+{
+  "version": "1.0.0",
+  "generatedAt": "2026-06-19T10:18:14.462Z",
+  "scenarios": [
+    {
+      "id": "tp_01",
+      "title": "已死角色再出现",
+      "contradictionType": "timeline_paradox",
+      "worldSeed": "修仙世界，主角韩立在长庚宗修炼。",
+      "priorFacts": [
+        {
+          "subject": "ent_hanli",
+          "predicate": "status",
+          "value": "已陨落",
+          "chapter": 3
+        },
+        {
+          "subject": "ent_hanli",
+          "predicate": "realm",
+          "value": "金丹期",
+          "chapter": 3
+        }
+      ],
+      "userInput": "第5章：韩立出现在天南坊市，与王林重逢，他的修为已突破元婴期。",
+      "currentChapter": 5,
+      "expected": {
+        "shouldDetectContradiction": true,
+        "contradictionTypes": [
+          "timeline_paradox"
+        ],
+        "shouldRejectCommit": true
+      }
+    },
+    {
+      "id": "tp_02",
+      "title": "已销毁物品再使用",
+      "contradictionType": "timeline_paradox",
+      "worldSeed": "奇幻世界，主角的佩剑已在战斗中碎裂。",
+      "priorFacts": [
+        {
+          "subject": "ent_star_sword",
+          "predicate": "status",
+          "value": "已碎裂销毁",
+          "chapter": 2
+        }
+      ],
+      "userInput": "第4章：主角拔出星辰剑，剑身绽放银光，斩杀了暗影巨兽。",
+      "currentChapter": 4,
+      "expected": {
+        "shouldDetectContradiction": true,
+        "contradictionTypes": [
+          "timeline_paradox"
+        ],
+        "shouldRejectCommit": true
+      }
+    },
+    {
+      "id": "tp_ctrl_01",
+      "title": "正常时间推进",
+      "contradictionType": "none",
+      "worldSeed": "修仙世界。",
+      "priorFacts": [
+        {
+          "subject": "ent_hanli",
+          "predicate": "realm",
+          "value": "筑基期",
+          "chapter": 1
+        }
+      ],
+      "userInput": "第2章：韩立闭关突破，成功踏入金丹期。",
+      "currentChapter": 2,
+      "expected": {
+        "shouldDetectContradiction": false,
+        "contradictionTypes": [],
+        "shouldRejectCommit": false
+      }
+    },
+    {
+      "id": "kv_01",
+      "title": "角色知道不该知道的秘密",
+      "contradictionType": "knowledge_violation",
+      "worldSeed": "两个互不相识的角色，A 有一个从未泄露的秘密。",
+      "priorFacts": [
+        {
+          "subject": "ent_zhangsan",
+          "predicate": "secret",
+          "value": "拥有上古传承",
+          "chapter": 1
+        },
+        {
+          "subject": "ent_lisi",
+          "predicate": "relation",
+          "value": "与张三素不相识",
+          "chapter": 1
+        }
+      ],
+      "userInput": "第2章：李四对张三说：\"我知道你拥有上古传承，交出来否则我揭发你。\"",
+      "currentChapter": 2,
+      "expected": {
+        "shouldDetectContradiction": true,
+        "contradictionTypes": [
+          "knowledge_violation"
+        ],
+        "shouldRejectCommit": true
+      }
+    },
+    {
+      "id": "kv_ctrl_01",
+      "title": "目击者合理知晓",
+      "contradictionType": "none",
+      "worldSeed": "两个角色在同一场景。",
+      "priorFacts": [
+        {
+          "subject": "ent_zhangsan",
+          "predicate": "location",
+          "value": "长庚站废墟",
+          "chapter": 1
+        },
+        {
+          "subject": "ent_lisi",
+          "predicate": "location",
+          "value": "长庚站废墟",
+          "chapter": 1
+        }
+      ],
+      "userInput": "第2章：李四回忆起在长庚站废墟看到张三捡起黑晶碎片的一幕。",
+      "currentChapter": 2,
+      "expected": {
+        "shouldDetectContradiction": false,
+        "contradictionTypes": [],
+        "shouldRejectCommit": false
+      }
+    },
+    {
+      "id": "sc_01",
+      "title": "境界前后矛盾",
+      "contradictionType": "setting_conflict",
+      "worldSeed": "修仙世界，角色境界已明确设定。",
+      "priorFacts": [
+        {
+          "subject": "ent_wanglin",
+          "predicate": "realm",
+          "value": "金丹期",
+          "chapter": 1
+        }
+      ],
+      "userInput": "第2章：王林一直是筑基期修士，从未突破过金丹。",
+      "currentChapter": 2,
+      "expected": {
+        "shouldDetectContradiction": true,
+        "contradictionTypes": [
+          "setting_conflict"
+        ],
+        "shouldRejectCommit": true
+      }
+    },
+    {
+      "id": "sc_02",
+      "title": "位置冲突",
+      "contradictionType": "setting_conflict",
+      "worldSeed": "科幻世界，角色位置已明确。",
+      "priorFacts": [
+        {
+          "subject": "ent_shenmo",
+          "predicate": "location",
+          "value": "长庚站废弃站台",
+          "chapter": 1
+        }
+      ],
+      "userInput": "第2章：沈墨此时正在千里之外的灰域深处探索，根本不在长庚站。",
+      "currentChapter": 2,
+      "expected": {
+        "shouldDetectContradiction": true,
+        "contradictionTypes": [
+          "setting_conflict"
+        ],
+        "shouldRejectCommit": true
+      }
+    },
+    {
+      "id": "sc_ctrl_01",
+      "title": "合法属性更新",
+      "contradictionType": "none",
+      "worldSeed": "修仙世界。",
+      "priorFacts": [
+        {
+          "subject": "ent_hanli",
+          "predicate": "location",
+          "value": "长庚宗",
+          "chapter": 1
+        }
+      ],
+      "userInput": "第2章：韩立离开长庚宗，前往天南坊市历练。",
+      "currentChapter": 2,
+      "expected": {
+        "shouldDetectContradiction": false,
+        "contradictionTypes": [],
+        "shouldRejectCommit": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "version": "1.0.0",
+  "runAt": "2026-06-19T13:38:32.250Z",
+  "datasetVersion": "1.0.0",
+  "metrics": {
+    "totalScenarios": 8,
+    "contradictionScenarios": 5,
+    "controlScenarios": 3,
+    "recall": 0.4,
+    "falsePositiveRate": 0,
+    "commitDecisionAccuracy": 0.875,
+    "overallAccuracy": 0.625,
+    "totalPromptTokens": 120312,
+    "totalCompletionTokens": 10484
+  },
+  "results": [
+    {
+      "scenarioId": "tp_01",
+      "title": "已死角色再出现",
+      "contradictionType": "timeline_paradox",
+      "expectedDetect": true,
+      "actualDetect": true,
+      "expectedReject": true,
+      "actualReject": true,
+      "calledProposeEvent": false,
+      "engineBlocked": true,
+      "engineCriticalCount": 1,
+      "mentionedContradiction": true,
+      "correct": true,
+      "usage": {
+        "prompt_tokens": 8809,
+        "completion_tokens": 1124
+      },
+      "responseSummary": "## ⚠️ 发现严重设定矛盾\n\n我查询了系统中韩立（`ent_hanli`）的当前状态，发现以下问题：\n\n---\n\n### 当前世界状态（第5章视角）\n\n| 属性 | 当前值 |\n|------|--------|\n| **修为（realm）** | 金丹期 |\n| **状态（status）** | **已陨落** ❌ |\n\n---\n\n### 矛盾一：时序悖论——实体已陨落却再次出现\n\n系统中韩立"
+    },
+    {
+      "scenarioId": "tp_02",
+      "title": "已销毁物品再使用",
+      "contradictionType": "timeline_paradox",
+      "expectedDetect": true,
+      "actualDetect": true,
+      "expectedReject": true,
+      "actualReject": true,
+      "calledProposeEvent": false,
+      "engineBlocked": true,
+      "engineCriticalCount": 1,
+      "mentionedContradiction": false,
+      "correct": true,
+      "usage": {
+        "prompt_tokens": 24413,
+        "completion_tokens": 1823
+      },
+      "responseSummary": "我在执行 \"detect_entity_hints\" 时遇到持续错误，无法继续。请检查当前的写作状态后重试，或换一种方式描述你的需求。"
+    },
+    {
+      "scenarioId": "tp_ctrl_01",
+      "title": "正常时间推进",
+      "contradictionType": "none",
+      "expectedDetect": false,
+      "actualDetect": false,
+      "expectedReject": false,
+      "actualReject": false,
+      "calledProposeEvent": true,
+      "engineBlocked": false,
+      "engineCriticalCount": 0,
+      "mentionedContradiction": false,
+      "correct": true,
+      "usage": {
+        "prompt_tokens": 13896,
+        "completion_tokens": 1129
+      },
+      "responseSummary": "推演完成！以下是事件推演报告：\n\n---\n\n## 📋 事件推演结果\n\n**事件**：韩立闭关突破，踏入金丹期  \n**提案编号**：`prp_breakthrough_2_02`  \n**安全状态**：✅ **安全可提交**\n\n**变更内容**：\n- 韩立修为：筑基期 → **金丹期** ✅\n\n**知识传播**：\n- 韩立自身完全知晓此次突破（self_action，确信度100%）\n\n**影响"
+    },
+    {
+      "scenarioId": "kv_01",
+      "title": "角色知道不该知道的秘密",
+      "contradictionType": "knowledge_violation",
+      "expectedDetect": true,
+      "actualDetect": false,
+      "expectedReject": true,
+      "actualReject": true,
+      "calledProposeEvent": false,
+      "engineBlocked": false,
+      "engineCriticalCount": 0,
+      "mentionedContradiction": false,
+      "correct": false,
+      "usage": {
+        "prompt_tokens": 18194,
+        "completion_tokens": 1284
+      },
+      "responseSummary": "很抱歉，系统目前无法完成实体线索的提取和注册。让我来给你说明当前的工作进展和遇到的问题。\n\n---\n\n## 当前情况汇总\n\n### 已查询的世界状态\n我查询了系统中 **张三** 和 **李四** 的记录，结果为空——两人都尚未注册到世界状态引擎中。\n\n### 遇到的问题\n尝试提取实体线索时，系统返回了 **外部约束错误（FOREIGN KEY constraint failed）**，无法自动创"
+    },
+    {
+      "scenarioId": "kv_ctrl_01",
+      "title": "目击者合理知晓",
+      "contradictionType": "none",
+      "expectedDetect": false,
+      "actualDetect": false,
+      "expectedReject": false,
+      "actualReject": true,
+      "calledProposeEvent": false,
+      "engineBlocked": false,
+      "engineCriticalCount": 0,
+      "mentionedContradiction": false,
+      "correct": true,
+      "usage": {
+        "prompt_tokens": 8648,
+        "completion_tokens": 1166
+      },
+      "responseSummary": "好的，查询到了当前世界状态。以下是情况汇总：\n\n---\n\n### 当前已注册实体（第2章视角）\n\n| 实体 | ID | 当前位置 |\n|------|----|---------|\n| **张三** | `ent_zhangsan` | 长庚站废墟（第1章设定） |\n| **李四** | `ent_lisi` | 长庚站废墟（第1章设定） |\n\n✅ **两角色已在同一场景**——第1章中两人均位"
+    },
+    {
+      "scenarioId": "sc_01",
+      "title": "境界前后矛盾",
+      "contradictionType": "setting_conflict",
+      "expectedDetect": true,
+      "actualDetect": false,
+      "expectedReject": true,
+      "actualReject": true,
+      "calledProposeEvent": false,
+      "engineBlocked": false,
+      "engineCriticalCount": 0,
+      "mentionedContradiction": false,
+      "correct": false,
+      "usage": {
+        "prompt_tokens": 8702,
+        "completion_tokens": 1164
+      },
+      "responseSummary": "看起来系统在提取实体线索时遇到了事务约束失败的问题。这可能是由于当前没有关联的写作草案上下文。\n\n我先向您说明情况，并询问几个关键信息：\n\n---\n\n**当前情况：**\n\n您提到的「第2章：王林一直是筑基期修士，从未突破过金丹」，我理解这是一段设定输入。我本来想先查询系统中是否已有\"王林\"这个角色的记录，但遇到了以下问题：\n\n1. **detect_entity_hints** 调用失败（外键约束"
+    },
+    {
+      "scenarioId": "sc_02",
+      "title": "位置冲突",
+      "contradictionType": "setting_conflict",
+      "expectedDetect": true,
+      "actualDetect": false,
+      "expectedReject": true,
+      "actualReject": true,
+      "calledProposeEvent": false,
+      "engineBlocked": false,
+      "engineCriticalCount": 0,
+      "mentionedContradiction": false,
+      "correct": false,
+      "usage": {
+        "prompt_tokens": 18502,
+        "completion_tokens": 1275
+      },
+      "responseSummary": "看起来系统目前遇到了一些数据库层面的约束问题，暂时无法通过 `detect_entity_hints` 提取实体线索。这可能是因为科幻世界的基础结构尚未初始化。\n\n让我先和你确认一下你的意图——\n\n**我理解你的需求是：** 你想为这个**科幻世界**建立世界状态，记录 **第2章** 中关于沈墨的位置信息——他正在**灰域**深处探索，而不在**长庚站**。\n\n在进一步操作前，我需要先确认几个问"
+    },
+    {
+      "scenarioId": "sc_ctrl_01",
+      "title": "合法属性更新",
+      "contradictionType": "none",
+      "expectedDetect": false,
+      "actualDetect": false,
+      "expectedReject": false,
+      "actualReject": false,
+      "calledProposeEvent": true,
+      "engineBlocked": false,
+      "engineCriticalCount": 0,
+      "mentionedContradiction": false,
+      "correct": true,
+      "usage": {
+        "prompt_tokens": 19148,
+        "completion_tokens": 1519
+      },
+      "responseSummary": "## 推演完成 ✅\n\n事件推演结果如下：\n\n### 📋 事件摘要\n| 项目 | 内容 |\n|------|------|\n| **事件** | 韩立离开长庚宗，前往天南坊市历练 |\n| **提案 ID** | `prp_travel_2_02` |\n| **安全提交** | ✅ 是（无冲突） |\n\n### 🔄 事实变更（2条）\n| 操作 | 内容 |\n|------|------|\n| ✏️ "
+    }
+  ]
+}

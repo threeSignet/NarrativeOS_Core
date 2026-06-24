@@ -402,14 +402,23 @@ export class ToolRouter {
   // getDefinitions — 生成 LLM function calling 可用的工具定义
   // =========================================================================
 
-  /** 返回所有 10 个 Tool 的 JSON Schema 定义 */
-  getDefinitions() {
+  /**
+   * 返回 Tool 的 JSON Schema 定义（供 LLM function calling）。
+   *
+   * @param options.excludeForbidden 若 true，过滤掉 AGENT_FORBIDDEN_TOOLS 中的工具
+   *   （commit_event/register_entity）——LLM 看不到禁用工具，减少幻觉尝试。
+   *   禁止列表由调用方传入（Core 层不硬依赖写作层的 AGENT_FORBIDDEN_TOOLS）。
+   */
+  getDefinitions(options?: { excludeForbidden?: string[] }) {
     const schemas = buildToolDefinitions();
-    return Object.values(schemas).map(s => ({
-      name: s.name as string,
-      description: s.description as string,
-      parameters: s.parameters as Record<string, unknown>,
-    }));
+    const forbidden = options?.excludeForbidden;
+    return Object.values(schemas)
+      .filter(s => !forbidden || !forbidden.includes(s.name as string))
+      .map(s => ({
+        name: s.name as string,
+        description: s.description as string,
+        parameters: s.parameters as Record<string, unknown>,
+      }));
   }
 
   /** 返回所有 Tool 名称列表 */
@@ -486,7 +495,7 @@ export class ToolRouter {
     const ctx = {
       projectId: this.writingProjectId,
       requestId: `tool_detect_${Date.now()}`,
-      authorId: 'default',
+      authorId: this.writingProjectId ?? 'default',
       sessionId: `tool_session`,
       trigger: 'agent_suggestion',
       sourceRefs: [],

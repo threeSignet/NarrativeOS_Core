@@ -30,6 +30,7 @@ import {
   handleIdeaAdd, handleIdeaDiscard, handleGoalAdd, handleDraftAdd, handleDraftAbandon,
   handleEntityDeprecate, handleBlueprintGenerate, handleBlueprintAccept,
   handleBlueprintAcceptSuggestion, handleBlueprintRejectSuggestion,
+  handleGraph, handleRelation, handleAssociation,
   type CliDeps,
 } from './command-handlers.js';
 // 项目选择器（每项目独立 db 文件）
@@ -172,6 +173,12 @@ if (existingProject) {
 // 重新创建 IdeaService（需要 draftService，存在循环依赖）
 const ideaService = new IdeaService(writingStore, auditService, draftService.createDraft.bind(draftService));
 
+// Phase 8：关系与图谱服务
+const { RelationService } = await import('../writing/services/relation-service.js');
+const { GraphService } = await import('../writing/services/graph-service.js');
+const relationService = new RelationService(writingStore, auditService, workflowService, coreBridge);
+const graphService = new GraphService(writingStore, coreBridge);
+
 // 延迟注入实体检测服务到 ToolRouter（detect_entity_hints 工具需要；entityService/writingProjectId 此时就绪）
 toolRouter.setEntityService(entityService, writingProjectId);
 
@@ -269,7 +276,9 @@ const cliDeps: CliDeps = {
   auditService: auditService as unknown as CliDeps['auditService'],
   coreBridge,
   writingStore,
-};
+  // Phase 8（用 unknown 注入——CliDeps 接口未声明这俩字段，handler 用类型擦除访问）
+  relationService, graphService,
+} as CliDeps & { relationService: unknown; graphService: unknown };
 
 /** 把 handler 返回的输出行打印出来（统一 IO） */
 function printLines(lines: string[]): void {
@@ -331,6 +340,10 @@ async function handleCommand(input: string): Promise<boolean> {
       // 无子命令 → 走查看
       printLines(handleBlueprint(cliDeps, parsed)); return false;
     }
+    // Phase 8：关系与图谱命令
+    case '/graph': printLines(await handleGraph(cliDeps, parsed)); return false;
+    case '/relation': printLines(await handleRelation(cliDeps, parsed)); return false;
+    case '/association': printLines(handleAssociation(cliDeps, parsed)); return false;
   }
 
   switch (cmd) {
@@ -445,6 +458,16 @@ async function handleCommand(input: string): Promise<boolean> {
         console.log(`  ${icon} [${t.stepType}] ${t.summary}`);
         if (t.toolName) console.log(`      工具: ${t.toolName}`);
         if (t.errorCode) console.log(`      错误: ${t.errorCode}`);
+      }
+      // token 用量汇总（从 llm_call 类型的 trace 累加）
+      const llmTraces = traces.filter(t => t.stepType === 'llm_call' && t.usage);
+      if (llmTraces.length > 0) {
+        const totalPrompt = llmTraces.reduce((sum, t) => sum + (t.usage!.prompt_tokens), 0);
+        const totalCompletion = llmTraces.reduce((sum, t) => sum + (t.usage!.completion_tokens), 0);
+        const totalCache = llmTraces.reduce((sum, t) => sum + (t.usage!.prompt_cache_hit_tokens ?? 0), 0);
+        console.log(`\n  \x1b[1;36m💰 Token 用量（${llmTraces.length} 次调用）\x1b[0m`);
+        console.log(`  Prompt: ${totalPrompt} | Completion: ${totalCompletion} | 总计: ${totalPrompt + totalCompletion}`);
+        if (totalCache > 0) console.log(`  缓存命中: ${totalCache}（节省成本）`);
       }
       console.log('');
       return false;

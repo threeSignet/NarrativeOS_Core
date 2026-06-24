@@ -4014,9 +4014,9 @@ export function validateDraftSimulationReadiness(draft: WritingDraft): { valid: 
 ### 18.1 测试策略
 
 ```
-外部 API（需要 Mock）:
-  - DeepSeek LLM         → MockLLMClient（已有）
-  - Embedding 服务       → MockEmbedder
+外部 API（使用真实服务，describeIf 守卫）:
+  - DeepSeek LLM         → DeepSeekLLMClientAdapter（真实 API，需 DEEPSEEK_API_KEY）
+  - Embedding 服务       → SiliconFlowEmbeddingService（真实 API，需 EMBEDDING_API_KEY）
 
 自己的代码（不用 Mock）:
   - Core Engine          → :memory: SQLite + 真实 ToolRouter
@@ -4378,7 +4378,7 @@ describe('Phase 7 主闭环', () => {
 | A13 | blueprint-service.ts | ✅ | 含去重 + accept/reject |
 | A14 | core-bridge/real-bridge.ts | ✅ | 真实包装 ToolRouter |
 | ✅ | agent 改造 + CLI 确认通道 | ✅ | §8（W1/W2 权限门控 + 桥接层 + Phase A/B/C 完成） |
-| ✅ | 端到端测试（:memory: SQLite + 真实 Core） | ✅ | §18-19：W18-a MockLLMClient + W18-b writing-main-loop 重写（9 测试）+ W19 全套已落地（核实：#46 commit-gate/permission-check、#47 core-bridge-audit、#48 visibility-filter、#50 reconcile；详见 core-development-log 2026-06-17 批次） |
+| ✅ | 端到端测试（:memory: SQLite + 真实 Core + 真实 LLM） | ✅ | §18-19：全部使用真实 DeepSeek LLM（无 Mock），writing-main-loop 重写（9 测试）+ W19 全套已落地 |
 
 ---
 

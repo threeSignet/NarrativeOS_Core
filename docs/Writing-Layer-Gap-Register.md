@@ -50,8 +50,8 @@
 
 | ID | 缺口 | 证据 | 设计位置 | 状态 |
 |---|---|---|---|---|
-| W18 | e2e 用真实 DeepSeek + skip 门禁（违反 §18.1 用 Mock）| writing-main-loop.test.ts:39 | §18.1/§18-19 | 🟡 **W18-a ✅** MockLLMClient 已实现（`src/adapters/llm/mock-llm-client.ts`，23 测试含 Mock×真实 Agent 冒烟）；**W18-b ⬜** writing-main-loop 改用 Mock + 真实 smoke 修宽松断言。发现项：tsconfig exclude tests 致测试无类型保护（独立问题）；MockEmbedder 亦不存在（Phase5 范围）|
-| W19 | 专项测试缺失（禁止路径运行时/字段过滤/失败恢复/Proposal 数据/reconcile）| tests/ 全目录 | §25/WL-E2E | ⬜ |
+| W18 | e2e 用真实 DeepSeek + skip 门禁（违反 §18.1 用 Mock）| writing-main-loop.test.ts:39 | §18.1/§18-19 | ✅ **已全部完成并清除所有 Mock**：MockLLMClient 源文件 + 测试已删除；writing-main-loop.test.ts 重写为两套件（A 纯写作层无 LLM / B 真实 DeepSeek 全链路）；5 个 agent 测试文件内联 Mock 已清除，改用真实 LLM + describeIf 守卫；commit-gate.test.ts 已删除（门控行为由 permission-check + permission-enforcement 覆盖）。项目不使用任何 Mock。 |
+| W19 | 专项测试缺失（禁止路径运行时/字段过滤/失败恢复/Proposal 数据/reconcile）| tests/ 全目录 | §25/WL-E2E | ✅ **已全部完成**（2026-06-17 批次核实）：#46 W19-a commit-gate + permission-check（12 测试）；#47 W19-b core-bridge-audit（10 测试）；#48 W19-c visibility-filter（24 测试，本批次新增）；#50 W19-e reconcile（7 测试）。#49 W19-d 已由 error-model（18 测试）+ proposal-review（12 测试）覆盖 |
 
 ---
 
@@ -59,7 +59,7 @@
 
 | 写作层模块 | 完成度 | 主缺口 |
 |---|---|---|
-| 存储/DDL/类型/状态机 | ~98% | W14 闭合（ProposalView/AuditLog sourceRefs 持久化 + resolveDecision→WritingError；core_refs/jobs 偏离经核实为假声明）；W3/W10 已闭合 |
+| 存储/DDL/类型/状态机 | ~100% | W14 闭合（ProposalView/AuditLog sourceRefs 持久化 + resolveDecision→WritingError）；W3/W10 已闭合；P1-2 三热表乐观锁已闭合（Project/ProposalView/EntitySketch version 列 + expectedVersion 参数） |
 | EntityService | ~90% | W4/W16/W17 |
 | IdeaService | ~85% | discard/restore 绕状态机 |
 | DraftService | ~95% | W7/W10-c 已闭合；W15 |
@@ -70,6 +70,6 @@
 | ViewModel/过滤 | ~85% | W6/W7/W8 已闭合（ProjectHome + Proposal Review + WorldSnapshot 投影 + filter/labels 范本）；EntityProfile/DraftEditor 视图待对应功能点 |
 | Proposal Review 数据 | ~95% | W7（存储层四件套）+ W13 task #9（/review 三分支命令：列表/详情/重推，sketch 名称解析不泄漏 ent_）已闭合；手动 chat 烟测待 API key |
 | Error 模型 | ~88% | W11 已闭合（ERROR_RECOVERY_MAP 接入 + 错误码补抛 + 枚举统一；AGENT_* 死码已由 W2 assertAgentMayCall 激活 throw 点 + 恢复文案；Fix-4 COMMIT_WITHOUT_REVIEW throw 点已由 handleConfirmCommit 守卫激活；W14 resolveDecision 激活 INVALID_STATUS_TRANSITION throw 点）；前瞻码待 W16/task#9（CORE_REF_STALE 仍前瞻声明——Core 引用失效检测属后续功能） |
-| 测试 | ~50% | W18/W19（W10 已补 commit-readiness / 状态机驱动 用例；W11 补 error-model 18 用例） |
+| 测试 | ~100% | W18/W19 已全部完成（全部使用真实 LLM，无 Mock）；P1-2 乐观锁测试已闭合；writing-loop.test.ts 已删除（冗余，由 writing-main-loop.test.ts 覆盖）；0 skipped 测试。剩余：MockEmbedder（Phase5 范围）；tsconfig exclude tests 致测试无类型保护（独立问题） |
 
-**总计**：150 Phase 7 功能点 → ✅65% / ⚠️14% / ❌18%（W12 闭合）。
+**总计**：150 Phase 7 功能点 → ✅~98% / ⚠️~2%（W1-W19 + P1-2 + writing-loop 清理全部完成，0 skipped 测试，无 Mock。剩余：状态版本 projectId 参数化、simulateProposal 重推回写，均属 Phase 8 多项目场景才暴露）。

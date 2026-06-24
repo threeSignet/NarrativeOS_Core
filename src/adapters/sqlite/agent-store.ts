@@ -365,6 +365,10 @@ export class SQLiteAgentStoreAdapter {
 
   addTrace(trace: Omit<AgentTraceRecord, 'id' | 'createdAt'>): string {
     const id = makeId('agent_trace');
+    // usage 存到 detail_json（不新增列，不破坏 schema）。若 trace 已有 detail，合并。
+    const detail = trace.usage
+      ? { ...(trace.detail as Record<string, unknown> ?? {}), usage: trace.usage }
+      : (trace.detail ?? {});
     const stmt = this.db.prepare(`
       INSERT INTO agent_traces (id, project_id, session_id, turn_id, step_index, step_type, status, summary, detail_json, tool_name, tool_call_id, proposal_id, event_id, error_code, next_action)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -372,7 +376,7 @@ export class SQLiteAgentStoreAdapter {
     stmt.run(
       id, trace.projectId, trace.sessionId, trace.turnId, trace.stepIndex,
       trace.stepType, trace.status, trace.summary,
-      JSON.stringify(trace.detail ?? {}),
+      JSON.stringify(detail),
       trace.toolName ?? null, trace.toolCallId ?? null,
       trace.proposalId ?? null, trace.eventId ?? null,
       trace.errorCode ?? null, trace.nextAction ?? null,

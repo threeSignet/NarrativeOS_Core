@@ -261,3 +261,29 @@ export function validateDraftSimulationReadiness(params: {
   }
   return { valid: true };
 }
+
+// ===========================================================================
+// Phase 8：关系候选状态机校验
+// ===========================================================================
+
+const RELATION_CANDIDATE_TRANSITIONS_SM: Record<string, string[]> = {
+  candidate: ['drafted', 'submitted', 'rejected', 'archived'],  // 允许直接提交（简化路径）
+  drafted: ['submitted', 'rejected', 'archived', 'candidate'],
+  submitted: ['committed', 'rejected', 'archived', 'drafted'],
+  committed: [],
+  rejected: ['archived'],
+  archived: ['candidate'],
+};
+
+export function validateRelationCandidateTransition(
+  currentStatus: string, targetStatus: string, relationId: string,
+): void {
+  if (currentStatus === targetStatus) return;
+  const allowed = RELATION_CANDIDATE_TRANSITIONS_SM[currentStatus];
+  if (!allowed || !allowed.includes(targetStatus)) {
+    throw new StateMachineError(
+      WritingErrorCode.INVALID_STATUS_TRANSITION,
+      currentStatus, targetStatus, 'WritingRelationCandidate', relationId,
+    );
+  }
+}

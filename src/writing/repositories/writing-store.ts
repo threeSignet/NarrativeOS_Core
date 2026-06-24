@@ -42,6 +42,9 @@ import type {
   WritingAuditLog, AuditTrigger, AuditResult,
   WritingCoreRef, WritingObjectType, CoreObjectType, RefStatus,
   WritingJob, JobStatus, JobCreator,
+  WritingRelationCandidate, RelationLayer, RelationDirection, RelationCandidateStatus,
+  AuthoringAssociation, RelationDetectionHint,
+  WritingObjectRef, CoreRelationRef, RelationTemporalScope,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
@@ -52,6 +55,7 @@ import {
   validateDraftTransition,
   validateEntitySketchTransition,
   validateProposalViewTransition,
+  validateRelationCandidateTransition,
 } from '../models/state-machine.js';
 
 // =============================================================================
@@ -72,6 +76,7 @@ CREATE TABLE IF NOT EXISTS writing_projects (
   current_draft_id     TEXT,
   workspace_mode       TEXT NOT NULL DEFAULT 'planning'
                        CHECK(workspace_mode IN ('planning','writing','reviewing','analysis','importing')),
+  version              INTEGER NOT NULL DEFAULT 1,
   created_at           TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
   deleted_at           TEXT
@@ -188,6 +193,7 @@ CREATE TABLE IF NOT EXISTS writing_entity_sketches (
   source_refs_json TEXT NOT NULL DEFAULT '[]',
   core_entity_id   TEXT,
   core_kind        TEXT,
+  version          INTEGER NOT NULL DEFAULT 1,
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
   deleted_at       TEXT,
@@ -242,6 +248,7 @@ CREATE TABLE IF NOT EXISTS writing_proposal_views (
   author_decision_at     TEXT,
   core_event_id          TEXT,
   commit_error_json      TEXT,
+  version                INTEGER NOT NULL DEFAULT 1,
   created_at             TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at             TEXT NOT NULL DEFAULT (datetime('now')),
   deleted_at             TEXT,
@@ -346,6 +353,64 @@ CREATE TABLE IF NOT EXISTS writing_project_preferences (
   FOREIGN KEY (project_id) REFERENCES writing_projects(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wpref_project ON writing_project_preferences(project_id);
+
+-- W.14 writing_relations：关系候选（Phase 8）
+CREATE TABLE IF NOT EXISTS writing_relations (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL,
+  source_entity_id    TEXT NOT NULL,
+  target_entity_id    TEXT NOT NULL,
+  relation_type_id    TEXT NOT NULL,
+  layer               TEXT NOT NULL DEFAULT 'world',
+  direction           TEXT NOT NULL DEFAULT 'directed',
+  strength            REAL,
+  temporal_scope_json TEXT DEFAULT '{}',
+  source_refs_json    TEXT NOT NULL DEFAULT '[]',
+  status              TEXT NOT NULL DEFAULT 'candidate',
+  core_refs_json      TEXT DEFAULT '[]',
+  version             INTEGER NOT NULL DEFAULT 1,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at          TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wrel_project ON writing_relations(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_wrel_source ON writing_relations(source_entity_id);
+CREATE INDEX IF NOT EXISTS idx_wrel_target ON writing_relations(target_entity_id);
+
+-- W.15 writing_associations：创作关联（Phase 8）
+CREATE TABLE IF NOT EXISTS writing_associations (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  source_ref_json  TEXT NOT NULL,
+  target_ref_json  TEXT NOT NULL,
+  label            TEXT NOT NULL,
+  kind             TEXT NOT NULL DEFAULT 'manual',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  status           TEXT NOT NULL DEFAULT 'active',
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wassoc_project ON writing_associations(project_id, status);
+
+-- W.16 writing_relation_hints：关系检测提示（Phase 8）
+CREATE TABLE IF NOT EXISTS writing_relation_hints (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  source_entity_id TEXT NOT NULL,
+  target_entity_id TEXT NOT NULL,
+  relation_type_id TEXT,
+  summary          TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  confidence       REAL NOT NULL DEFAULT 0.5,
+  possible_layer   TEXT NOT NULL DEFAULT 'world',
+  status           TEXT NOT NULL DEFAULT 'new',
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wrhint_project ON writing_relation_hints(project_id, status);
 `;
 
 // =============================================================================
@@ -404,6 +469,7 @@ export interface ProjectRow {
   active_blueprint_id: string | null;
   current_draft_id: string | null;
   workspace_mode: string;
+  version: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -489,6 +555,7 @@ export interface EntitySketchRow {
   source_refs_json: string;
   core_entity_id: string | null;
   core_kind: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -530,6 +597,7 @@ export interface ProposalViewRow {
   author_decision_at: string | null;
   core_event_id: string | null;
   commit_error_json: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -616,6 +684,7 @@ function rowToProject(row: ProjectRow): WritingProject {
     currentDraftId: row.current_draft_id ?? undefined,
     workspaceMode: row.workspace_mode as WorkspaceMode,
     sourceRefs: [], // Project 的 sourceRefs 在服务层构建，不在此层
+    version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at ?? undefined,
@@ -734,6 +803,7 @@ function rowToEntitySketch(row: EntitySketchRow): WritingEntitySketch {
     sourceRefs: safeParseJson<SourceRef[]>(row.source_refs_json, row.id, 'source_refs_json'),
     coreEntityId: row.core_entity_id ?? undefined,
     coreKind: row.core_kind ?? undefined,
+    version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at ?? undefined,
@@ -784,6 +854,7 @@ function rowToProposalView(row: ProposalViewRow): WritingProposalView {
     authorDecisionAt: row.author_decision_at ?? undefined,
     coreEventId: row.core_event_id ?? undefined,
     commitError: row.commit_error_json ? safeParseJson<unknown>(row.commit_error_json, row.id, 'commit_error_json') : undefined,
+    version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at ?? undefined,
@@ -910,7 +981,7 @@ export class SQLiteWritingStore {
     activeBlueprintId?: string | null;
     currentDraftId?: string | null;
     workspaceMode?: WorkspaceMode;
-  }): void {
+  }, expectedVersion?: number): void {
     const parts: string[] = [];
     const values: unknown[] = [];
 
@@ -942,9 +1013,22 @@ export class SQLiteWritingStore {
     }
     if (parts.length === 0) return;
 
+    parts.push("version = version + 1");
     parts.push("updated_at = datetime('now')");
-    values.push(projectId);
-    this.db.prepare(`UPDATE writing_projects SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    if (expectedVersion !== undefined) {
+      // 乐观锁：传了 expectedVersion 时加 WHERE version = ? 条件
+      values.push(projectId, expectedVersion);
+      const result = this.db.prepare(`UPDATE writing_projects SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...values);
+      if (result.changes === 0) {
+        const row = this.db.prepare('SELECT version FROM writing_projects WHERE id = ?').get(projectId) as { version: number } | undefined;
+        if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `项目不存在: ${projectId}`);
+        throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `项目版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+      }
+    } else {
+      // 无乐观锁（向后兼容，内部调用如 reconcile 不传 version）
+      values.push(projectId);
+      this.db.prepare(`UPDATE writing_projects SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    }
   }
 
   /** 级联软删除项目及其所有子表记录（audit_logs 除外） */
@@ -1540,7 +1624,7 @@ export class SQLiteWritingStore {
     summary?: string | null; status?: EntitySketchStatus;
     coreEntityId?: string | null; coreKind?: string | null;
     aliases?: string[]; tags?: string[];
-  }): void {
+  }, expectedVersion?: number): void {
     const fieldMap: Record<string, string> = {
       displayName: 'display_name', typeLabel: 'type_label',
       summary: 'summary', status: 'status',
@@ -1567,9 +1651,20 @@ export class SQLiteWritingStore {
       }
     }
     if (parts.length === 0) return;
+    parts.push("version = version + 1");
     parts.push("updated_at = datetime('now')");
-    values.push(sketchId);
-    this.db.prepare(`UPDATE writing_entity_sketches SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    if (expectedVersion !== undefined) {
+      values.push(sketchId, expectedVersion);
+      const result = this.db.prepare(`UPDATE writing_entity_sketches SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...values);
+      if (result.changes === 0) {
+        const row = this.db.prepare('SELECT version FROM writing_entity_sketches WHERE id = ?').get(sketchId) as { version: number } | undefined;
+        if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `实体草图不存在: ${sketchId}`);
+        throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `实体草图版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+      }
+    } else {
+      values.push(sketchId);
+      this.db.prepare(`UPDATE writing_entity_sketches SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    }
   }
 
   /**
@@ -1688,7 +1783,7 @@ export class SQLiteWritingStore {
     factDiff?: FactDiffEntry[]; involvedEntityIds?: string[];
     ruleWarnings?: RuleWarning[]; simulationInputs?: SimulationInputs; authorDecision?: string | null;
     coreEventId?: string | null; commitError?: unknown | null;
-  }): void {
+  }, expectedVersion?: number): void {
     const fieldMap: Record<string, string> = {
       coreProposalId: 'core_proposal_id', coreBridgeResult: 'core_bridge_result_json',
       status: 'status', humanSummary: 'human_summary',
@@ -1720,9 +1815,20 @@ export class SQLiteWritingStore {
       }
     }
     if (parts.length === 0) return;
+    parts.push("version = version + 1");
     parts.push("updated_at = datetime('now')");
-    values.push(viewId);
-    this.db.prepare(`UPDATE writing_proposal_views SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    if (expectedVersion !== undefined) {
+      values.push(viewId, expectedVersion);
+      const result = this.db.prepare(`UPDATE writing_proposal_views SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...values);
+      if (result.changes === 0) {
+        const row = this.db.prepare('SELECT version FROM writing_proposal_views WHERE id = ?').get(viewId) as { version: number } | undefined;
+        if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `审核视图不存在: ${viewId}`);
+        throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `审核视图版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+      }
+    } else {
+      values.push(viewId);
+      this.db.prepare(`UPDATE writing_proposal_views SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+    }
   }
 
   /**
@@ -1926,5 +2032,188 @@ export class SQLiteWritingStore {
     if (progress !== undefined) { parts.push('progress = ?'); values.push(progress); }
     values.push(jobId);
     this.db.prepare(`UPDATE writing_jobs SET ${parts.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  // ===========================================================================
+  // Phase 8：关系候选 / 创作关联 / 检测提示（CRUD）
+  // ===========================================================================
+
+  // ---- 关系候选 ----
+
+  createRelationCandidate(projectId: string, params: {
+    sourceEntityId: string; targetEntityId: string; relationTypeId: string;
+    layer?: string; direction?: string; strength?: number;
+    temporalScope?: Record<string, unknown>; sourceRefs?: SourceRef[];
+  }): WritingRelationCandidate {
+    const id = makeId('wrel');
+    this.db.prepare(`INSERT INTO writing_relations
+      (id, project_id, source_entity_id, target_entity_id, relation_type_id, layer, direction, strength, temporal_scope_json, source_refs_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+      id, projectId, params.sourceEntityId, params.targetEntityId, params.relationTypeId,
+      params.layer ?? 'world', params.direction ?? 'directed', params.strength ?? null,
+      safeStringify(params.temporalScope ?? {}),
+      safeStringify(params.sourceRefs ?? []),
+    );
+    return this.getRelationCandidate(id)!;
+  }
+
+  getRelationCandidate(id: string): WritingRelationCandidate | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_relations WHERE id = ? AND deleted_at IS NULL').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToRelationCandidate(row) : undefined;
+  }
+
+  listRelationCandidates(projectId: string, filter?: { status?: string; layer?: string }): WritingRelationCandidate[] {
+    let sql = 'SELECT * FROM writing_relations WHERE project_id = ? AND deleted_at IS NULL';
+    const vals: unknown[] = [projectId];
+    if (filter?.status) { sql += ' AND status = ?'; vals.push(filter.status); }
+    if (filter?.layer) { sql += ' AND layer = ?'; vals.push(filter.layer); }
+    sql += ' ORDER BY created_at DESC';
+    return (this.db.prepare(sql).all(...vals) as Record<string, unknown>[]).map(r => this.rowToRelationCandidate(r));
+  }
+
+  updateRelationCandidate(id: string, expectedVersion: number, updates: Partial<WritingRelationCandidate>): void {
+    const fieldMap: Record<string, string> = {
+      status: 'status', layer: 'layer', direction: 'direction', strength: 'strength',
+      relationTypeId: 'relation_type_id', sourceEntityId: 'source_entity_id',
+      targetEntityId: 'target_entity_id',
+    };
+    // 状态机校验
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_relations WHERE id = ? AND version = ?')
+        .get(id, expectedVersion) as { status: string } | undefined;
+      if (current) validateRelationCandidateTransition(current.status, updates.status, id);
+    }
+    const parts: string[] = []; const vals: unknown[] = [];
+    for (const [k, v] of Object.entries(updates)) {
+      if (v !== undefined && fieldMap[k]) { parts.push(`${fieldMap[k]} = ?`); vals.push(v); }
+    }
+    if (updates.temporalScope !== undefined) { parts.push('temporal_scope_json = ?'); vals.push(safeStringify(updates.temporalScope)); }
+    if (updates.coreRefs !== undefined) { parts.push('core_refs_json = ?'); vals.push(safeStringify(updates.coreRefs)); }
+    if (updates.sourceRefs !== undefined) { parts.push('source_refs_json = ?'); vals.push(safeStringify(updates.sourceRefs)); }
+    if (parts.length === 0) return;
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id, expectedVersion);
+    this.db.prepare(`UPDATE writing_relations SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...vals);
+  }
+
+  private rowToRelationCandidate(row: Record<string, unknown>): WritingRelationCandidate {
+    const rid = row['id'] as string;
+    return {
+      id: rid, projectId: row['project_id'] as string,
+      sourceEntityId: row['source_entity_id'] as string, targetEntityId: row['target_entity_id'] as string,
+      relationTypeId: row['relation_type_id'] as string,
+      layer: row['layer'] as RelationLayer, direction: row['direction'] as RelationDirection,
+      strength: row['strength'] as number | null ?? undefined,
+      temporalScope: safeParseJson(row['temporal_scope_json'] as string, rid, 'temporal_scope') as RelationTemporalScope,
+      sourceRefs: safeParseJson(row['source_refs_json'] as string, rid, 'source_refs') as SourceRef[],
+      status: row['status'] as RelationCandidateStatus,
+      coreRefs: safeParseJson(row['core_refs_json'] as string, rid, 'core_refs') as CoreRelationRef[],
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  // ---- 创作关联 ----
+
+  createAssociation(projectId: string, params: {
+    sourceRef: WritingObjectRef; targetRef: WritingObjectRef; label: string;
+    kind?: string; sourceRefs?: SourceRef[];
+  }): AuthoringAssociation {
+    const id = makeId('wasc');
+    this.db.prepare(`INSERT INTO writing_associations
+      (id, project_id, source_ref_json, target_ref_json, label, kind, source_refs_json)
+      VALUES (?,?,?,?,?,?,?)`).run(
+      id, projectId, safeStringify(params.sourceRef), safeStringify(params.targetRef),
+      params.label, params.kind ?? 'manual', safeStringify(params.sourceRefs ?? []),
+    );
+    return this.getAssociation(id)!;
+  }
+
+  getAssociation(id: string): AuthoringAssociation | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_associations WHERE id = ? AND deleted_at IS NULL').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToAssociation(row) : undefined;
+  }
+
+  listAssociations(projectId: string): AuthoringAssociation[] {
+    return (this.db.prepare('SELECT * FROM writing_associations WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at DESC').all(projectId) as Record<string, unknown>[]).map(r => this.rowToAssociation(r));
+  }
+
+  updateAssociation(id: string, updates: { label?: string; kind?: string; status?: string }): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.label) { parts.push('label = ?'); vals.push(updates.label); }
+    if (updates.kind) { parts.push('kind = ?'); vals.push(updates.kind); }
+    if (updates.status) { parts.push('status = ?'); vals.push(updates.status); }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_associations SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  private rowToAssociation(row: Record<string, unknown>): AuthoringAssociation {
+    const aid = row['id'] as string;
+    return {
+      id: aid, projectId: row['project_id'] as string,
+      sourceRef: safeParseJson(row['source_ref_json'] as string, aid, 'source_ref') as WritingObjectRef,
+      targetRef: safeParseJson(row['target_ref_json'] as string, aid, 'target_ref') as WritingObjectRef,
+      label: row['label'] as string, kind: row['kind'] as AuthoringAssociation['kind'],
+      sourceRefs: safeParseJson(row['source_refs_json'] as string, aid, 'source_refs') as SourceRef[],
+      status: row['status'] as 'active' | 'archived',
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  // ---- 关系检测提示 ----
+
+  createRelationHint(projectId: string, params: {
+    sourceEntityId: string; targetEntityId: string; relationTypeId?: string;
+    summary: string; confidence?: number; possibleLayer?: string; sourceRefs?: string[];
+  }): RelationDetectionHint {
+    const id = makeId('wrht');
+    this.db.prepare(`INSERT INTO writing_relation_hints
+      (id, project_id, source_entity_id, target_entity_id, relation_type_id, summary, confidence, possible_layer, source_refs_json)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      id, projectId, params.sourceEntityId, params.targetEntityId,
+      params.relationTypeId ?? null, params.summary, params.confidence ?? 0.5,
+      params.possibleLayer ?? 'world', safeStringify(params.sourceRefs ?? []),
+    );
+    return this.getRelationHint(id)!;
+  }
+
+  getRelationHint(id: string): RelationDetectionHint | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_relation_hints WHERE id = ? AND deleted_at IS NULL').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToRelationHint(row) : undefined;
+  }
+
+  listRelationHints(projectId: string, filter?: { status?: string }): RelationDetectionHint[] {
+    let sql = 'SELECT * FROM writing_relation_hints WHERE project_id = ? AND deleted_at IS NULL';
+    const vals: unknown[] = [projectId];
+    if (filter?.status) { sql += ' AND status = ?'; vals.push(filter.status); }
+    sql += ' ORDER BY created_at DESC';
+    return (this.db.prepare(sql).all(...vals) as Record<string, unknown>[]).map(r => this.rowToRelationHint(r));
+  }
+
+  updateRelationHint(id: string, updates: { status?: string; relationTypeId?: string }): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.status) { parts.push('status = ?'); vals.push(updates.status); }
+    if (updates.relationTypeId) { parts.push('relation_type_id = ?'); vals.push(updates.relationTypeId); }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_relation_hints SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  private rowToRelationHint(row: Record<string, unknown>): RelationDetectionHint {
+    const hid = row['id'] as string;
+    return {
+      id: hid, projectId: row['project_id'] as string,
+      sourceEntityId: row['source_entity_id'] as string, targetEntityId: row['target_entity_id'] as string,
+      relationTypeId: (row['relation_type_id'] as string) ?? undefined,
+      summary: row['summary'] as string,
+      sourceRefs: safeParseJson(row['source_refs_json'] as string, hid, 'source_refs') as string[],
+      confidence: row['confidence'] as number,
+      possibleLayer: row['possible_layer'] as RelationLayer,
+      status: row['status'] as RelationDetectionHint['status'],
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
   }
 }

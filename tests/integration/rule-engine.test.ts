@@ -275,7 +275,7 @@ describe('RuleEngine', () => {
       const ids = engine.getActiveRuleIds();
 
       // 当前内置规则数
-      expect(ids.transitions.length).toBe(1);  // deadEntityConstraint
+      expect(ids.transitions.length).toBe(2);  // deadEntityConstraint + settingConflictConstraint
       expect(ids.inferences.length).toBe(1);   // bidirectionalEnemy
       expect(ids.constraints.length).toBe(1);  // uniquePredicate（占位）
       expect(ids.propagations.length).toBe(2); // subject_auto + witness

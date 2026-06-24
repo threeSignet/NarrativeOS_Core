@@ -187,10 +187,21 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
     }));
     const fallback = parseDeepSeekTextToolCalls(content);
 
+    // 解析 token usage（DeepSeek API 返回 data.usage，供 evals 成本统计 + /history 汇总）
+    const rawUsage = data?.usage as Record<string, unknown> | undefined;
+    const usage = rawUsage && typeof rawUsage['prompt_tokens'] === 'number'
+      ? {
+          prompt_tokens: rawUsage['prompt_tokens'] as number,
+          completion_tokens: typeof rawUsage['completion_tokens'] === 'number' ? rawUsage['completion_tokens'] as number : 0,
+          prompt_cache_hit_tokens: typeof rawUsage['prompt_cache_hit_tokens'] === 'number' ? rawUsage['prompt_cache_hit_tokens'] as number : undefined,
+        }
+      : undefined;
+
     return {
       content: fallback.cleanContent,
       reasoningContent,
       toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : fallback.toolCalls,
+      usage,
     };
   }
 
@@ -236,9 +247,9 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
   async chatStreamWithTools(
     messages: ChatMessage[],
     tools: ToolDefinition[],
-    onToken: (text: string) => void,
+    onToken: (token: string) => void,
     options?: ChatOptions,
-  ): Promise<{ content: string; reasoningContent?: string; toolCalls?: ParsedToolCall[] }> {
+  ): Promise<{ content: string; reasoningContent?: string; toolCalls?: ParsedToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; prompt_cache_hit_tokens?: number } }> {
     this.validateApiKey();
 
     const model = options?.model ?? this.config.model;
@@ -284,6 +295,7 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
         name: tc.name,
         arguments: tc.arguments,
       })),
+      usage: result.usage,
     };
   }
 
@@ -301,7 +313,7 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
   private async callApiStream(
     body: Record<string, unknown>,
     onToken: (text: string) => void,
-  ): Promise<{ content: string; reasoningContent?: string; toolCalls?: ParsedToolCall[] }> {
+  ): Promise<{ content: string; reasoningContent?: string; toolCalls?: ParsedToolCall[]; usage?: { prompt_tokens: number; completion_tokens: number; prompt_cache_hit_tokens?: number } }> {
     const url = `${this.config.baseUrl}/chat/completions`;
 
     // P1 修复：加 90s 超时（流式输出通常较长），避免连接建立阶段挂起阻塞 ReAct
@@ -329,6 +341,8 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
     const decoder = new TextDecoder();
     let fullContent = '';
     let reasoningContent = '';
+    // 流式 usage（DeepSeek 在最后一个 chunk 带 usage 字段）
+    let streamUsage: { prompt_tokens: number; completion_tokens: number; prompt_cache_hit_tokens?: number } | undefined;
     // tool_calls 按 index 累积（SSE delta 可能分片到达）
     const toolCallAccum: Map<number, { id: string; name: string; argsChunks: string[] }> = new Map();
 
@@ -350,6 +364,15 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
 
           try {
             const event = JSON.parse(jsonStr) as Record<string, unknown>;
+            // 流式 usage：DeepSeek 在最后一个 chunk（[DONE] 前）带 usage 字段（无 choices）
+            const eventUsage = event['usage'] as Record<string, unknown> | undefined;
+            if (eventUsage && typeof eventUsage['prompt_tokens'] === 'number') {
+              streamUsage = {
+                prompt_tokens: eventUsage['prompt_tokens'] as number,
+                completion_tokens: typeof eventUsage['completion_tokens'] === 'number' ? eventUsage['completion_tokens'] as number : 0,
+                prompt_cache_hit_tokens: typeof eventUsage['prompt_cache_hit_tokens'] === 'number' ? eventUsage['prompt_cache_hit_tokens'] as number : undefined,
+              };
+            }
             const choices = event['choices'] as Array<Record<string, unknown>> | undefined;
             if (!choices || choices.length === 0) continue;
 
@@ -409,6 +432,7 @@ export class DeepSeekLLMClientAdapter implements LLMClient {
       content: fallback.cleanContent,
       reasoningContent: reasoningContent || undefined,
       toolCalls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : fallback.toolCalls,
+      usage: streamUsage,
     };
   }
 

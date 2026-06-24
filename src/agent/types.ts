@@ -221,7 +221,8 @@ export type AgentTraceStepType =
   | 'action'
   | 'observation'
   | 'reflection_summary'
-  | 'response_summary';
+  | 'response_summary'
+  | 'llm_call';  // LLM 调用的 token usage 记录（供 evals + /history）
 
 export type AgentTraceStatus = 'ok' | 'warning' | 'error';
 
@@ -248,6 +249,15 @@ export interface AgentTraceRecord {
   errorCode?: string;
   nextAction?: string;
   createdAt: string;
+  /**
+   * 本轮 LLM 调用的 token 用量（供 evals 成本统计 + /history 汇总）。
+   * 仅 stepType='llm_call' 的 trace 记录填充，其他步骤为 undefined。
+   */
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    prompt_cache_hit_tokens?: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

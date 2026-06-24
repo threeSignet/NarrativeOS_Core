@@ -39,7 +39,10 @@ export type SourceRefKind =
   | 'user_decision'      // 来自作者决策
   | 'agent_observation'  // 来自智能体观察
   | 'import'             // 来自导入
-  | 'chat';              // 来自对话
+  | 'chat'               // 来自对话
+  | 'relation_hint'      // 来自关系检测提示（Phase 8）
+  | 'entity'             // 来自实体（Phase 8 关联关系）
+  | 'association';       // 来自创作关联（Phase 8）
 
 /**
  * 带来源引用的对象通用字段

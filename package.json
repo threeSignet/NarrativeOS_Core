@@ -21,7 +21,9 @@
     "live": "tsx tests/live-session.ts",
     "live:agent": "tsx tests/live-agent-session.ts",
     "chat": "tsx tests/chat-session.ts",
-    "cli": "tsx src/cli/chat.ts"
+    "cli": "tsx src/cli/chat.ts",
+    "eval:generate": "tsx tests/evals/generate-dataset.ts",
+    "eval": "tsx tests/evals/run-eval.ts"
   },
   "keywords": [
     "narrative",

@@ -884,3 +884,109 @@ export function handleBlueprintRejectSuggestion(deps: CliDeps, cmd: ParsedComman
   }
   return lines;
 }
+
+// =============================================================================
+// Phase 8：/graph /relation /association 命令
+// =============================================================================
+
+/** /graph — 图谱概览或导出 */
+export async function handleGraph(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  const sub = cmd.positional[0];
+  const graphService = (deps as unknown as { graphService?: { buildGraphView: (ctx: unknown, mode: string) => Promise<{ nodes: unknown[]; edges: unknown[] }>; exportGraph: (ctx: unknown, format: string) => Promise<string> } }).graphService;
+
+  if (sub === 'export') {
+    const format = (cmd.positional[1] as string) ?? 'json';
+    if (!graphService) { lines.push(`${C.red}❌ GraphService 未注入${C.reset}`); return lines; }
+    try {
+      const data = await graphService.exportGraph(ctx, format);
+      lines.push(`${C.green}✅ 图谱已导出（${format}，${data.length} 字符）${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  if (!graphService) { lines.push(`${C.red}❌ GraphService 未注入${C.reset}`); return lines; }
+  try {
+    const graph = await graphService.buildGraphView(ctx, 'world');
+    lines.push(`${C.boldYellow}🌐 图谱概览${C.reset}`);
+    lines.push(`  节点：${graph.nodes.length} 个 | 边：${graph.edges.length} 条`);
+    const nl = new Map<string, number>(); const el = new Map<string, number>();
+    for (const n of graph.nodes as Array<{ sourceLayer: string }>) nl.set(n.sourceLayer, (nl.get(n.sourceLayer) ?? 0) + 1);
+    for (const e of graph.edges as Array<{ sourceLayer: string }>) el.set(e.sourceLayer, (el.get(e.sourceLayer) ?? 0) + 1);
+    if (nl.size > 0) lines.push(`  节点来源：${[...nl].map(([k, v]) => `${k}=${v}`).join(' / ')}`);
+    if (el.size > 0) lines.push(`  边来源：${[...el].map(([k, v]) => `${k}=${v}`).join(' / ')}`);
+    lines.push(`\n  ${C.gray}子命令：/graph export json | /relation add/list/submit | /association add${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /relation add|list|submit */
+export async function handleRelation(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const sub = cmd.positional[0];
+  const lines: string[] = [];
+  const rs = (deps as unknown as { relationService?: { createRelationCandidate: (ctx: unknown, p: unknown) => { id: string; status: string }; listRelationCandidates: (ctx: unknown) => Array<{ id: string; status: string; layer: string; relationTypeId: string; sourceEntityId: string; targetEntityId: string }>; submitRelationCandidate: (ctx: unknown, id: string) => Promise<unknown> } }).relationService;
+  if (!rs) { lines.push(`${C.red}❌ RelationService 未注入${C.reset}`); return lines; }
+
+  if (sub === 'add') {
+    const [sourceId, targetId, typeId] = cmd.positional.slice(1);
+    if (!sourceId || !targetId || !typeId) { lines.push(`${C.yellow}用法：/relation add <源实体id> <目标实体id> <关系类型id>${C.reset}`); return lines; }
+    try {
+      const c = rs.createRelationCandidate(ctx, { sourceEntityId: sourceId, targetEntityId: targetId, relationTypeId: typeId });
+      lines.push(`${C.green}✅ 关系候选已创建${C.reset}`);
+      lines.push(`  ${C.gray}id: ${c.id} | 状态: ${c.status}${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  if (sub === 'submit') {
+    const id = cmd.positional[1];
+    if (!id) { lines.push(`${C.yellow}用法：/relation submit <id>${C.reset}`); return lines; }
+    try { await rs.submitRelationCandidate(ctx, id); lines.push(`${C.green}✅ ${id} 已提交${C.reset}`); }
+    catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  // 默认 list
+  try {
+    const candidates = rs.listRelationCandidates(ctx);
+    lines.push(`${C.boldYellow}🔗 关系候选（${candidates.length} 条）${C.reset}`);
+    if (candidates.length === 0) { lines.push(`  ${C.gray}暂无。用 /relation add 创建。${C.reset}`); return lines; }
+    for (const c of candidates) {
+      const icon = c.status === 'committed' ? '✅' : c.status === 'submitted' ? '📤' : '📝';
+      lines.push(`  ${icon} [${c.status}/${c.layer}] ${c.relationTypeId}: ${c.sourceEntityId} → ${c.targetEntityId}`);
+      lines.push(`    ${C.gray}id: ${c.id}${C.reset}`);
+    }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /association add <sourceId> <targetId> <label> */
+export function handleAssociation(deps: CliDeps, cmd: ParsedCommand): HandlerResult {
+  const ctx = deps.ctx();
+  const sub = cmd.positional[0];
+  const lines: string[] = [];
+  const rs = (deps as unknown as { relationService?: { createAssociation: (ctx: unknown, p: unknown) => { id: string }; listAssociations: (ctx: unknown) => Array<{ id: string; label: string; status: string }> } }).relationService;
+  if (!rs) { lines.push(`${C.red}❌ RelationService 未注入${C.reset}`); return lines; }
+
+  if (sub === 'add') {
+    const [sourceId, targetId, ...labelParts] = cmd.positional.slice(1);
+    const label = labelParts.join(' ');
+    if (!sourceId || !targetId || !label) { lines.push(`${C.yellow}用法：/association add <源id> <目标id> <关联标签>${C.reset}`); return lines; }
+    try {
+      const a = rs.createAssociation(ctx, { sourceRef: { objectType: 'entity', objectId: sourceId }, targetRef: { objectType: 'entity', objectId: targetId }, label });
+      lines.push(`${C.green}✅ 创作关联：${label}${C.reset}`);
+      lines.push(`  ${C.gray}id: ${a.id}${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  // 默认 list
+  try {
+    const assocs = rs.listAssociations(ctx);
+    lines.push(`${C.boldYellow}📎 创作关联（${assocs.length} 条）${C.reset}`);
+    for (const a of assocs) { lines.push(`  [${a.status}] ${a.label} ${C.gray}(${a.id})${C.reset}`); }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}

@@ -67,7 +67,7 @@ export function makeRequestContext(partial: {
 }): WritingRequestContext {
   return {
     projectId: partial.projectId,
-    authorId: partial.authorId ?? 'default',
+    authorId: partial.authorId ?? partial.projectId,
     sessionId: partial.sessionId ?? `session_${Date.now()}`,
     trigger: partial.trigger ?? 'author_action',
     sourceRefs: partial.sourceRefs ?? [],

@@ -40,6 +40,7 @@ export interface WritingProject {
   currentDraftId?: string;
   workspaceMode: WorkspaceMode;
   sourceRefs: SourceRef[];
+  version: number;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -294,6 +295,7 @@ export interface WritingEntitySketch {
   sourceRefs: SourceRef[];
   coreEntityId?: string;
   coreKind?: string;
+  version: number;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -414,6 +416,7 @@ export interface WritingProposalView {
   authorDecisionAt?: string;
   coreEventId?: string;
   commitError?: unknown;
+  version: number;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -516,4 +519,161 @@ export interface WritingJob {
   createdBy: JobCreator;
   createdAt: string;
   updatedAt: string;
+}
+
+// =============================================================================
+// Phase 8：实体关系与图谱
+// =============================================================================
+
+/** 关系层级——决定关系能否进入 Proposal Review（仅 world 层可提交 Core） */
+export type RelationLayer = 'world' | 'authoring' | 'analysis' | 'view' | 'reader_model';
+
+/** 关系方向 */
+export type RelationDirection = 'directed' | 'bidirectional' | 'undirected' | 'hierarchical';
+
+/** 关系候选状态机：candidate → drafted → submitted → committed（或 rejected/archived） */
+export type RelationCandidateStatus =
+  | 'candidate' | 'drafted' | 'submitted' | 'committed' | 'rejected' | 'archived';
+
+/** 关系候选状态机的合法转换 */
+export const RELATION_CANDIDATE_TRANSITIONS: Record<string, string[]> = {
+  candidate: ['drafted', 'submitted', 'rejected', 'archived'],
+  drafted: ['submitted', 'rejected', 'archived', 'candidate'],
+  submitted: ['committed', 'rejected', 'archived', 'drafted'],
+  committed: [],
+  rejected: ['archived'],
+  archived: ['candidate'],
+};
+
+/**
+ * 写作对象引用——关联关系可指向非实体对象（章节/草案/伏笔/灵感）
+ */
+export interface WritingObjectRef {
+  objectType: 'entity' | 'chapter' | 'draft' | 'thread' | 'idea';
+  objectId: string;
+}
+
+/** Core 关系引用——候选关系提交到 Core 后回写的 Fact 引用 */
+export interface CoreRelationRef {
+  factId: string;
+  predicate: string;
+  relationKind: string;
+}
+
+/** 关系时间范围 */
+export interface RelationTemporalScope {
+  fromChapter?: number;
+  toChapter?: number;
+  validAtChapters?: number[];
+}
+
+/**
+ * 关系候选（WritingRelationCandidate）——正式世界关系候选
+ * world 层候选可经 Proposal Review 提交到 Core。设计依据：Feature-Spec §8.4
+ */
+export interface WritingRelationCandidate {
+  id: string;
+  projectId: string;
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationTypeId: string;
+  layer: RelationLayer;
+  direction: RelationDirection;
+  strength?: number;
+  temporalScope?: RelationTemporalScope;
+  sourceRefs: SourceRef[];
+  status: RelationCandidateStatus;
+  coreRefs?: CoreRelationRef[];
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 创作关联（AuthoringAssociation）——作者手动标注，不进 Core
+ * 设计依据：Feature-Spec §8.3
+ */
+export interface AuthoringAssociation {
+  id: string;
+  projectId: string;
+  sourceRef: WritingObjectRef;
+  targetRef: WritingObjectRef;
+  label: string;
+  kind: 'reference' | 'echo' | 'theme' | 'draft_link' | 'evidence' | 'note' | 'manual';
+  sourceRefs: SourceRef[];
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 关系检测提示（RelationDetectionHint）——系统/Agent 检测到的潜在关系
+ * 不自动成为候选。设计依据：Feature-Spec §8.1
+ */
+export interface RelationDetectionHint {
+  id: string;
+  projectId: string;
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationTypeId?: string;
+  summary: string;
+  sourceRefs: string[];
+  confidence: number;
+  possibleLayer: RelationLayer;
+  status: 'new' | 'ignored' | 'merged' | 'converted_to_candidate';
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// GraphView 数据模型（Feature-Spec §10.1）
+// ---------------------------------------------------------------------------
+
+export type GraphViewMode = 'world' | 'relationship' | 'spatial' | 'timeline' | 'thread' | 'proposal' | 'custom';
+export type GraphSourceLayer = 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'view';
+
+export interface GraphNodeView {
+  id: string;
+  label: string;
+  objectRef: WritingObjectRef;
+  sourceLayer: GraphSourceLayer;
+  projectTypeLabel: string;
+  statusLabel: string;
+}
+
+export interface GraphEdgeView {
+  id: string;
+  label: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  objectRef?: WritingObjectRef;
+  sourceLayer: GraphSourceLayer;
+  direction: RelationDirection;
+}
+
+export interface GraphFilterState {
+  layers?: RelationLayer[];
+  relationTypes?: string[];
+  entityTypes?: string[];
+  statusFilter?: string[];
+}
+
+export interface GraphLayoutState {
+  positions: Record<string, { x: number; y: number }>;
+  layoutType: 'force' | 'hierarchy' | 'manual';
+}
+
+/**
+ * 完整图谱视图——Phase 8 核心数据产物
+ * 合并 Core Fact + 关系候选 + 创作关联 + 检测提示，投影成统一节点+边结构
+ */
+export interface GraphView {
+  id: string;
+  projectId: string;
+  label: string;
+  mode: GraphViewMode;
+  nodes: GraphNodeView[];
+  edges: GraphEdgeView[];
+  filters: GraphFilterState;
+  layout: GraphLayoutState;
 }

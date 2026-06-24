@@ -26,7 +26,7 @@ describe('WritingStore 建表验证', () => {
   // 建表验证 — 确认 11 张表全部创建
   // =============================================================================
 
-  it('13 张表全部创建成功', () => {
+  it('16 张表全部创建成功（13 原 + 3 Phase 8）', () => {
     const tables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'writing_%' ORDER BY name"
     ).all() as Array<{ name: string }>;
@@ -46,7 +46,11 @@ describe('WritingStore 建表验证', () => {
     // W12 §3.1：工作台布局 + 项目级偏好容器（与项目 1:1）
     expect(names).toContain('writing_workspace_layouts');
     expect(names).toContain('writing_project_preferences');
-    expect(tables.length).toBe(13);
+    // Phase 8：关系候选 + 创作关联 + 检测提示
+    expect(names).toContain('writing_relations');
+    expect(names).toContain('writing_associations');
+    expect(names).toContain('writing_relation_hints');
+    expect(tables.length).toBe(16);
   });
 
   // =============================================================================

@@ -79,4 +79,15 @@ export interface ToolCallResult {
     name: string;
     arguments: Record<string, unknown>;
   }>;
+  /**
+   * 本轮 LLM 调用的 token 用量（供 evals 成本统计 + /history 汇总）。
+   * 字段名对齐 DeepSeek API 返回（prompt_tokens / completion_tokens / prompt_cache_hit_tokens）。
+   * 可选——不涉及真实 API 的实现可不填。
+   */
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    /** DeepSeek 缓存命中 token 数（降低成本，evals 报告区分） */
+    prompt_cache_hit_tokens?: number;
+  };
 }

@@ -171,26 +171,44 @@ const witnessPropagation: PropagationRule = {
 // =============================================================================
 
 /**
- * 通用 Transition Rule：死亡实体不能行动
+ * 终态词表——表示实体"不可再行动"的状态值。
+ * 覆盖跨题材常见终态（已死/已陨落/已销毁/已碎裂等）。
+ */
+const TERMINAL_STATUS_KEYWORDS: ReadonlyArray<string> = [
+  'dead', 'deceased', '已死', '已陨落', '陨落', '已销毁', '销毁', '已碎裂', '碎裂',
+  '已消散', '消散', '已封印', '永久封印', '已湮灭', '湮灭',
+];
+
+function isTerminalStatus(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const lower = value.toLowerCase();
+  return TERMINAL_STATUS_KEYWORDS.some(kw => lower.includes(kw.toLowerCase()));
+}
+
+/**
+ * 通用 Transition Rule：终态实体约束（硬检测——时序悖论）
+ * 终态实体（已死亡/已陨落/已销毁等）不能作为新事件行动主体。
+ * 产出 critical Thread → isSafeToCommit 判否 → commitEvent 阻断。
  */
 const deadEntityConstraint: TransitionRule = {
   id: 'constraint_dead_entity_action',
-  description: '已死亡实体不能作为新事件的行动主体',
+  description: '终态实体（已死亡/已陨落/已销毁等）不能作为新事件的行动主体',
 
   check(event: NarrativeEvent, factStore: FactStore): NarrativeThread | null {
     const subject = event.params['subject'] as string | undefined;
     if (!subject) return null;
 
     const snapshot = factStore.getSnapshot(subject, event.chapter);
-    if (snapshot['status'] === 'dead' || snapshot['status'] === 'deceased') {
+    const status = snapshot['status'];
+    if (isTerminalStatus(status)) {
       return {
         id: `thr_deadaction_${event.chapter}`,
         type: 'rule_violation',
         direction: 'retroactive',
         severity: 'critical',
-        description: `已死亡实体 ${subject} 在第 ${event.chapter} 章作为事件主体行动`,
+        description: `终态实体 ${subject} 当前状态为「${String(status)}」，不能在第 ${event.chapter} 章作为事件主体行动`,
         closeCondition: {
-          customRule: '需要补充复活事件，或修改死亡事件为其他状态',
+          customRule: '需要补充复活/修复事件，或修改终态事件为其他状态',
           withinChapters: 5,
         },
         status: 'UNFILLED',
@@ -201,6 +219,63 @@ const deadEntityConstraint: TransitionRule = {
         relatedEntities: [subject],
         upstreamFactIds: [],
       };
+    }
+    return null;
+  },
+};
+
+/**
+ * 通用 Transition Rule：属性硬冲突约束（硬检测——设定冲突）
+ *
+ * 检测事件描述中是否包含与当前世界状态直接矛盾的表述。
+ * 例如：当前 realm=金丹期，但事件描述说"一直是筑基期"——设定冲突。
+ * 产出 critical Thread → 阻断 commit。
+ */
+const settingConflictConstraint: TransitionRule = {
+  id: 'constraint_setting_conflict',
+  description: '事件描述与实体当前属性存在直接矛盾',
+
+  check(event: NarrativeEvent, factStore: FactStore): NarrativeThread | null {
+    const subject = event.params['subject'] as string | undefined;
+    if (!subject) return null;
+
+    const description = event.params['event_description'] as string | undefined;
+    if (!description || typeof description !== 'string') return null;
+
+    const snapshot = factStore.getSnapshot(subject, event.chapter);
+
+    // 检查"一直是X"/"始终是X"/"从未Y"等否定性表述与当前值冲突
+    const denialPatterns = [/一直是(.+?)(?:[，。,。;\s]|$)/, /始终是(.+?)(?:[，。,。;\s]|$)/, /从未(.+?)(?:[，。,。;\s]|$)/];
+
+    for (const [predicate, currentValue] of Object.entries(snapshot)) {
+      if (!currentValue) continue;
+      const currentStr = String(currentValue);
+      for (const pattern of denialPatterns) {
+        const matches = description.match(pattern);
+        if (matches) {
+          const claimedValue = matches[1]!.trim();
+          if (claimedValue && claimedValue !== currentStr && !currentStr.includes(claimedValue)) {
+            return {
+              id: `thr_settingconflict_${event.chapter}`,
+              type: 'logic_conflict',
+              direction: 'retroactive',
+              severity: 'critical',
+              description: `设定冲突：${subject} 的 ${predicate} 当前为「${currentStr}」，但事件描述声称「${claimedValue}」`,
+              closeCondition: {
+                customRule: '修正事件描述使其与当前设定一致，或通过 Retcon 修改历史设定',
+                withinChapters: 5,
+              },
+              status: 'UNFILLED',
+              closedBy: null,
+              createdAtEvent: event.id,
+              createdAtChapter: event.chapter,
+              milestones: [],
+              relatedEntities: [subject],
+              upstreamFactIds: [],
+            };
+          }
+        }
+      }
     }
     return null;
   },
@@ -287,6 +362,7 @@ export class RuleEngine {
     this.transitionRules = [
       ...(options?.transitions ?? []),
       deadEntityConstraint,
+      settingConflictConstraint,
     ];
     this.inferenceRules = [
       ...(options?.inferences ?? []),
