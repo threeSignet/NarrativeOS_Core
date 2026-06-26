@@ -45,6 +45,9 @@ import type {
   WritingRelationCandidate, RelationLayer, RelationDirection, RelationCandidateStatus,
   AuthoringAssociation, RelationDetectionHint,
   WritingObjectRef, CoreRelationRef, RelationTemporalScope,
+  WritingSpatialNode, SpatialNodeMaturity, SpatialNodeStatus,
+  WritingSpatialEdge, SpatialEdgeStatus, SpatialEdgeLayer, SpatialEdgeDirection, SpatialTraversalRule,
+  SpatialView,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
@@ -56,6 +59,8 @@ import {
   validateEntitySketchTransition,
   validateProposalViewTransition,
   validateRelationCandidateTransition,
+  validateSpatialNodeMaturity,
+  validateSpatialEdgeStatus,
 } from '../models/state-machine.js';
 
 // =============================================================================
@@ -411,6 +416,64 @@ CREATE TABLE IF NOT EXISTS writing_relation_hints (
   deleted_at       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wrhint_project ON writing_relation_hints(project_id, status);
+
+-- W.17 writing_spatial_nodes：空间节点（Phase 9）
+CREATE TABLE IF NOT EXISTS writing_spatial_nodes (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  label            TEXT NOT NULL,
+  type_id          TEXT NOT NULL,
+  aliases_json     TEXT NOT NULL DEFAULT '[]',
+  description      TEXT,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  maturity         TEXT NOT NULL DEFAULT 'hint',
+  status           TEXT NOT NULL DEFAULT 'active',
+  core_entity_id   TEXT,
+  properties_json  TEXT NOT NULL DEFAULT '{}',
+  version          INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wsnode_project ON writing_spatial_nodes(project_id, status);
+
+-- W.18 writing_spatial_edges：空间边（Phase 9）
+CREATE TABLE IF NOT EXISTS writing_spatial_edges (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL,
+  source_node_id   TEXT NOT NULL,
+  target_node_id   TEXT NOT NULL,
+  type_id          TEXT NOT NULL,
+  layer            TEXT NOT NULL DEFAULT 'world',
+  direction        TEXT NOT NULL DEFAULT 'directed',
+  traversal_json   TEXT DEFAULT '{}',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  status           TEXT NOT NULL DEFAULT 'candidate',
+  version          INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at       TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wsed_project ON writing_spatial_edges(project_id, status);
+
+-- W.19 writing_spatial_views：空间视图（Phase 9）
+CREATE TABLE IF NOT EXISTS writing_spatial_views (
+  id                    TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  name                  TEXT NOT NULL,
+  root_spatial_node_id  TEXT,
+  layer_ids_json        TEXT NOT NULL DEFAULT '[]',
+  mode                  TEXT NOT NULL DEFAULT 'graph',
+  positions_json        TEXT NOT NULL DEFAULT '{}',
+  filters_json          TEXT NOT NULL DEFAULT '{}',
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at            TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wsv_project ON writing_spatial_views(project_id);
 `;
 
 // =============================================================================
@@ -1052,6 +1115,10 @@ export class SQLiteWritingStore {
       'writing_relations',
       'writing_associations',
       'writing_relation_hints',
+      // Phase 9（W.17/W.18/W.19）：空间节点/空间边/空间视图，生命周期跟随项目。
+      'writing_spatial_nodes',
+      'writing_spatial_edges',
+      'writing_spatial_views',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -1404,6 +1471,8 @@ export class SQLiteWritingStore {
       maturity?: BlueprintMaturity;
       entityTypes?: BlueprintTypeDef[];
       relationTypes?: BlueprintTypeDef[];
+      spatialNodeTypes?: BlueprintTypeDef[];
+      spatialEdgeTypes?: BlueprintTypeDef[];
       changeSuggestions?: BlueprintChangeSuggestion[];
       supersededBy?: string | null;
     },
@@ -1411,6 +1480,8 @@ export class SQLiteWritingStore {
     const fieldMap: Record<string, string> = {
       maturity: 'maturity', entityTypes: 'entity_types_json',
       relationTypes: 'relation_types_json',
+      spatialNodeTypes: 'spatial_node_types_json',
+      spatialEdgeTypes: 'spatial_edge_types_json',
       changeSuggestions: 'change_suggestions_json',
       supersededBy: 'superseded_by',
     };
@@ -2225,6 +2296,254 @@ export class SQLiteWritingStore {
       confidence: row['confidence'] as number,
       possibleLayer: row['possible_layer'] as RelationLayer,
       status: row['status'] as RelationDetectionHint['status'],
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 9：空间节点 CRUD（W.17）
+  // ===========================================================================
+
+  createSpatialNode(projectId: string, input: {
+    label: string; typeId: string; aliases?: string[];
+    description?: string; sourceRefs?: SourceRef[];
+    properties?: Record<string, unknown>;
+  }): WritingSpatialNode {
+    const id = `wsnode_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_spatial_nodes (id, project_id, label, type_id, aliases_json, description, source_refs_json, properties_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id, projectId, input.label, input.typeId,
+      JSON.stringify(input.aliases ?? []),
+      input.description ?? null,
+      JSON.stringify(input.sourceRefs ?? []),
+      JSON.stringify(input.properties ?? {}),
+    );
+    return this.getSpatialNode(id)!;
+  }
+
+  getSpatialNode(id: string): WritingSpatialNode | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_spatial_nodes WHERE id = ? AND deleted_at IS NULL'
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToSpatialNode(row) : undefined;
+  }
+
+  listSpatialNodes(projectId: string, options?: {
+    maturity?: SpatialNodeMaturity; status?: SpatialNodeStatus; typeId?: string;
+  }): WritingSpatialNode[] {
+    let sql = 'SELECT * FROM writing_spatial_nodes WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (options?.maturity) { sql += ' AND maturity = ?'; params.push(options.maturity); }
+    if (options?.status) { sql += ' AND status = ?'; params.push(options.status); }
+    if (options?.typeId) { sql += ' AND type_id = ?'; params.push(options.typeId); }
+    sql += ' ORDER BY created_at DESC';
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(r => this.rowToSpatialNode(r));
+  }
+
+  updateSpatialNode(id: string, expectedVersion: number, updates: Partial<{
+    label: string; typeId: string; aliases: string[];
+    description: string; sourceRefs: SourceRef[];
+    maturity: SpatialNodeMaturity; status: SpatialNodeStatus;
+    coreEntityId: string; properties: Record<string, unknown>;
+  }>): { newVersion: number } {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.label !== undefined) { parts.push('label = ?'); vals.push(updates.label); }
+    if (updates.typeId !== undefined) { parts.push('type_id = ?'); vals.push(updates.typeId); }
+    if (updates.aliases !== undefined) { parts.push('aliases_json = ?'); vals.push(JSON.stringify(updates.aliases)); }
+    if (updates.description !== undefined) { parts.push('description = ?'); vals.push(updates.description); }
+    if (updates.sourceRefs !== undefined) { parts.push('source_refs_json = ?'); vals.push(JSON.stringify(updates.sourceRefs)); }
+    if (updates.maturity !== undefined) {
+      const current = this.db.prepare('SELECT maturity FROM writing_spatial_nodes WHERE id = ?').get(id) as { maturity: string } | undefined;
+      if (current) validateSpatialNodeMaturity(current.maturity, updates.maturity, id);
+      parts.push('maturity = ?'); vals.push(updates.maturity);
+    }
+    if (updates.status !== undefined) { parts.push('status = ?'); vals.push(updates.status); }
+    if (updates.coreEntityId !== undefined) { parts.push('core_entity_id = ?'); vals.push(updates.coreEntityId); }
+    if (updates.properties !== undefined) { parts.push('properties_json = ?'); vals.push(JSON.stringify(updates.properties)); }
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id, expectedVersion);
+    const result = this.db.prepare(
+      `UPDATE writing_spatial_nodes SET ${parts.join(', ')} WHERE id = ? AND version = ?`
+    ).run(...vals);
+    if (result.changes === 0) {
+      const row = this.db.prepare('SELECT version FROM writing_spatial_nodes WHERE id = ?').get(id) as { version: number } | undefined;
+      if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `空间节点不存在: ${id}`, { objectType: 'spatial_node', objectId: id });
+      throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `空间节点版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+    }
+    return { newVersion: expectedVersion + 1 };
+  }
+
+  private rowToSpatialNode(row: Record<string, unknown>): WritingSpatialNode {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      label: row['label'] as string, typeId: row['type_id'] as string,
+      aliases: safeParseJson(row['aliases_json'] as string, row['id'] as string, 'aliases') as string[],
+      description: (row['description'] as string) ?? undefined,
+      sourceRefs: safeParseJson(row['source_refs_json'] as string, row['id'] as string, 'source_refs') as SourceRef[],
+      maturity: row['maturity'] as SpatialNodeMaturity,
+      status: row['status'] as SpatialNodeStatus,
+      coreEntityId: (row['core_entity_id'] as string) ?? undefined,
+      properties: safeParseJson(row['properties_json'] as string, row['id'] as string, 'properties') as Record<string, unknown>,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 9：空间边 CRUD（W.18）
+  // ===========================================================================
+
+  createSpatialEdge(projectId: string, input: {
+    sourceNodeId: string; targetNodeId: string; typeId: string;
+    layer?: SpatialEdgeLayer; direction?: SpatialEdgeDirection;
+    traversal?: SpatialTraversalRule; sourceRefs?: SourceRef[];
+  }): WritingSpatialEdge {
+    const id = `wsed_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_spatial_edges (id, project_id, source_node_id, target_node_id, type_id, layer, direction, traversal_json, source_refs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id, projectId, input.sourceNodeId, input.targetNodeId, input.typeId,
+      input.layer ?? 'world', input.direction ?? 'directed',
+      JSON.stringify(input.traversal ?? {}),
+      JSON.stringify(input.sourceRefs ?? []),
+    );
+    return this.getSpatialEdge(id)!;
+  }
+
+  getSpatialEdge(id: string): WritingSpatialEdge | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_spatial_edges WHERE id = ? AND deleted_at IS NULL'
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToSpatialEdge(row) : undefined;
+  }
+
+  listSpatialEdges(projectId: string, options?: {
+    status?: SpatialEdgeStatus; layer?: SpatialEdgeLayer; sourceNodeId?: string; targetNodeId?: string;
+  }): WritingSpatialEdge[] {
+    let sql = 'SELECT * FROM writing_spatial_edges WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (options?.status) { sql += ' AND status = ?'; params.push(options.status); }
+    if (options?.layer) { sql += ' AND layer = ?'; params.push(options.layer); }
+    if (options?.sourceNodeId) { sql += ' AND source_node_id = ?'; params.push(options.sourceNodeId); }
+    if (options?.targetNodeId) { sql += ' AND target_node_id = ?'; params.push(options.targetNodeId); }
+    sql += ' ORDER BY created_at DESC';
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(r => this.rowToSpatialEdge(r));
+  }
+
+  updateSpatialEdge(id: string, expectedVersion: number, updates: Partial<{
+    typeId: string; layer: SpatialEdgeLayer; direction: SpatialEdgeDirection;
+    traversal: SpatialTraversalRule; sourceRefs: SourceRef[]; status: SpatialEdgeStatus;
+  }>): { newVersion: number } {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.typeId !== undefined) { parts.push('type_id = ?'); vals.push(updates.typeId); }
+    if (updates.layer !== undefined) { parts.push('layer = ?'); vals.push(updates.layer); }
+    if (updates.direction !== undefined) { parts.push('direction = ?'); vals.push(updates.direction); }
+    if (updates.traversal !== undefined) { parts.push('traversal_json = ?'); vals.push(JSON.stringify(updates.traversal)); }
+    if (updates.sourceRefs !== undefined) { parts.push('source_refs_json = ?'); vals.push(JSON.stringify(updates.sourceRefs)); }
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_spatial_edges WHERE id = ?').get(id) as { status: string } | undefined;
+      if (current) validateSpatialEdgeStatus(current.status, updates.status, id);
+      parts.push('status = ?'); vals.push(updates.status);
+    }
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id, expectedVersion);
+    const result = this.db.prepare(
+      `UPDATE writing_spatial_edges SET ${parts.join(', ')} WHERE id = ? AND version = ?`
+    ).run(...vals);
+    if (result.changes === 0) {
+      const row = this.db.prepare('SELECT version FROM writing_spatial_edges WHERE id = ?').get(id) as { version: number } | undefined;
+      if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `空间边不存在: ${id}`, { objectType: 'spatial_edge', objectId: id });
+      throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `空间边版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+    }
+    return { newVersion: expectedVersion + 1 };
+  }
+
+  private rowToSpatialEdge(row: Record<string, unknown>): WritingSpatialEdge {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      sourceNodeId: row['source_node_id'] as string, targetNodeId: row['target_node_id'] as string,
+      typeId: row['type_id'] as string,
+      layer: row['layer'] as SpatialEdgeLayer,
+      direction: row['direction'] as SpatialEdgeDirection,
+      traversal: (() => { const t = safeParseJson(row['traversal_json'] as string, row['id'] as string, 'traversal') as Record<string, unknown>; return (t && Object.keys(t).length > 0) ? t as unknown as SpatialTraversalRule : undefined; })(),
+      sourceRefs: safeParseJson(row['source_refs_json'] as string, row['id'] as string, 'source_refs') as SourceRef[],
+      status: row['status'] as SpatialEdgeStatus,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 9：空间视图 CRUD（W.19）
+  // ===========================================================================
+
+  createSpatialView(projectId: string, input: {
+    name: string; rootSpatialNodeId?: string; layerIds?: string[];
+    mode?: SpatialView['mode']; positions?: Record<string, { x: number; y: number; z?: number }>;
+    filters?: Record<string, unknown>;
+  }): SpatialView {
+    const id = `wsv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_spatial_views (id, project_id, name, root_spatial_node_id, layer_ids_json, mode, positions_json, filters_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id, projectId, input.name,
+      input.rootSpatialNodeId ?? null,
+      JSON.stringify(input.layerIds ?? []),
+      input.mode ?? 'graph',
+      JSON.stringify(input.positions ?? {}),
+      JSON.stringify(input.filters ?? {}),
+    );
+    return this.getSpatialView(id)!;
+  }
+
+  getSpatialView(id: string): SpatialView | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_spatial_views WHERE id = ? AND deleted_at IS NULL'
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToSpatialView(row) : undefined;
+  }
+
+  listSpatialViews(projectId: string): SpatialView[] {
+    return (this.db.prepare(
+      'SELECT * FROM writing_spatial_views WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at DESC'
+    ).all(projectId) as Record<string, unknown>[]).map(r => this.rowToSpatialView(r));
+  }
+
+  updateSpatialView(id: string, updates: Partial<{
+    name: string; rootSpatialNodeId: string; layerIds: string[];
+    mode: SpatialView['mode']; positions: Record<string, { x: number; y: number; z?: number }>;
+    filters: Record<string, unknown>;
+  }>): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.name !== undefined) { parts.push('name = ?'); vals.push(updates.name); }
+    if (updates.rootSpatialNodeId !== undefined) { parts.push('root_spatial_node_id = ?'); vals.push(updates.rootSpatialNodeId); }
+    if (updates.layerIds !== undefined) { parts.push('layer_ids_json = ?'); vals.push(JSON.stringify(updates.layerIds)); }
+    if (updates.mode !== undefined) { parts.push('mode = ?'); vals.push(updates.mode); }
+    if (updates.positions !== undefined) { parts.push('positions_json = ?'); vals.push(JSON.stringify(updates.positions)); }
+    if (updates.filters !== undefined) { parts.push('filters_json = ?'); vals.push(JSON.stringify(updates.filters)); }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_spatial_views SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  private rowToSpatialView(row: Record<string, unknown>): SpatialView {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      name: row['name'] as string,
+      rootSpatialNodeId: (row['root_spatial_node_id'] as string) ?? undefined,
+      layerIds: safeParseJson(row['layer_ids_json'] as string, row['id'] as string, 'layer_ids') as string[],
+      mode: row['mode'] as SpatialView['mode'],
+      positions: safeParseJson(row['positions_json'] as string, row['id'] as string, 'positions') as Record<string, { x: number; y: number; z?: number }>,
+      filters: safeParseJson(row['filters_json'] as string, row['id'] as string, 'filters') as Record<string, unknown>,
       createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
     };
   }

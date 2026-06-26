@@ -344,6 +344,48 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         },
       },
     },
+
+    // Tool 14: detect_spatial_nodes（Phase 9：空间节点识别）
+    detect_spatial_nodes: {
+      name: 'detect_spatial_nodes',
+      description: '从对话中识别空间节点（地点/空间层/区域等），创建空间节点写入系统供作者审核。',
+      parameters: {
+        type: 'object',
+        properties: {
+          nodes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string', description: '空间节点名称' },
+                type_id: { type: 'string', description: '空间类型 ID（引用蓝图 spatialNodeTypes）' },
+                aliases: { type: 'array', items: { type: 'string' }, description: '别名列表' },
+                description: { type: 'string', description: '描述' },
+              },
+              required: ['label', 'type_id'],
+            },
+            description: '识别到的空间节点列表',
+          },
+        },
+        required: ['nodes'],
+      },
+    },
+
+    // Tool 15: get_spatial_view（Phase 9：空间视图查询）
+    get_spatial_view: {
+      name: 'get_spatial_view',
+      description: '查询当前项目空间视图。返回空间节点和空间边的完整网络，用于了解"地点在哪里、地点之间有什么关系"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['graph', 'tree'],
+            description: '视图模式：graph=网络图，tree=层级树（默认 graph）',
+          },
+        },
+      },
+    },
   };
 }
 
@@ -377,6 +419,11 @@ export class ToolRouter {
   private relationService: any | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private graphService: any | undefined;
+  // Phase 9：空间服务（可选注入）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private spatialService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private spatialViewService: any | undefined;
 
   /** 延迟注入写作层实体检测服务（chat.ts 在 entityService 创建后调用） */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -390,6 +437,14 @@ export class ToolRouter {
   setGraphServices(relationService: any, graphService: any, writingProjectId: string): void {
     this.relationService = relationService;
     this.graphService = graphService;
+    this.writingProjectId = writingProjectId;
+  }
+
+  /** 延迟注入写作层空间服务（chat.ts 在 spatialService 创建后调用） */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setSpatialServices(spatialService: any, spatialViewService: any, writingProjectId: string): void {
+    this.spatialService = spatialService;
+    this.spatialViewService = spatialViewService;
     this.writingProjectId = writingProjectId;
   }
   // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
@@ -446,6 +501,8 @@ export class ToolRouter {
         case 'commit_schema_extension': return await this.handleCommitSchemaExtension(params);
         case 'detect_relation_hints':  return await this.handleDetectRelationHints(params);
         case 'get_graph_view':         return await this.handleGetGraphView(params);
+        case 'detect_spatial_nodes':   return await this.handleDetectSpatialNodes(params);
+        case 'get_spatial_view':       return await this.handleGetSpatialView(params);
         default:
           return this.error(ToolErrorCode.UNKNOWN_TOOL, `未知工具: ${toolName}`, false, `可用工具: ${this.toolNames().join(', ')}`);
       }
@@ -492,6 +549,7 @@ export class ToolRouter {
       'get_open_threads', 'register_entity',
       'propose_schema_extension', 'commit_schema_extension',
       'detect_relation_hints', 'get_graph_view',
+      'detect_spatial_nodes', 'get_spatial_view',
     ];
   }
 
@@ -1051,6 +1109,111 @@ export class ToolRouter {
     return this.ok({
       nodeCount,
       edgeCount,
+      mode,
+      markdown: lines.join('\n'),
+    });
+  }
+
+  // =========================================================================
+  // Tool 14: detect_spatial_nodes（Phase 9：空间节点识别）
+  // =========================================================================
+
+  private async handleDetectSpatialNodes(params: Record<string, unknown>) {
+    if (!this.spatialService || !this.writingProjectId) {
+      return this.error(
+        ToolErrorCode.INTERNAL_ERROR,
+        '空间服务未配置（写作层未注入）',
+        false,
+        '此工具仅在写作层 CLI 环境可用。',
+      );
+    }
+
+    const rawNodes = params['nodes'];
+    if (!Array.isArray(rawNodes) || rawNodes.length === 0) {
+      return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'nodes 必须是非空数组', false, '请提供至少一个空间节点。');
+    }
+
+    const ctx = this.makeToolContext('spatial_detect');
+    const created: Array<{ id: string; label: string; typeId: string }> = [];
+
+    for (const n of rawNodes) {
+      const node = n as Record<string, unknown>;
+      if (typeof node['label'] !== 'string' || !node['label']) continue;
+      if (typeof node['type_id'] !== 'string' || !node['type_id']) continue;
+
+      const result = this.spatialService.createSpatialNode(ctx, {
+        label: node['label'] as string,
+        typeId: node['type_id'] as string,
+        aliases: Array.isArray(node['aliases']) ? node['aliases'] as string[] : undefined,
+        description: typeof node['description'] === 'string' ? node['description'] as string : undefined,
+      });
+      created.push({ id: result.id, label: result.label, typeId: result.typeId });
+    }
+
+    return this.ok({
+      detected: created.length,
+      nodes: created,
+      message: `已创建 ${created.length} 个空间节点（hint 状态）。用 /spatial list 查看，成熟度逐步推进后可注册 Core。`,
+    });
+  }
+
+  // =========================================================================
+  // Tool 15: get_spatial_view（Phase 9：空间视图查询）
+  // =========================================================================
+
+  private async handleGetSpatialView(params: Record<string, unknown>) {
+    if (!this.spatialViewService || !this.writingProjectId) {
+      return this.error(
+        ToolErrorCode.INTERNAL_ERROR,
+        '空间视图服务未配置（写作层未注入）',
+        false,
+        '此工具仅在写作层 CLI 环境可用。',
+      );
+    }
+
+    const mode = typeof params['mode'] === 'string' ? params['mode'] : 'graph';
+
+    const ctx = this.makeToolContext('spatial_view');
+    const data = this.spatialViewService.exportSpatialData(ctx);
+
+    // 渲染为 Agent 可读的文本摘要
+    const lines: string[] = [];
+    lines.push(`## 空间视图（${mode}）\n`);
+
+    if (data.nodes.length === 0) {
+      lines.push('当前项目无空间节点。用 detect_spatial_nodes 创建空间节点。');
+    } else {
+      lines.push(`**${data.nodes.length} 个空间节点，${data.edges.length} 条空间边**\n`);
+
+      // 按类型分组
+      const byType = new Map<string, typeof data.nodes>();
+      for (const n of data.nodes) {
+        const list = byType.get(n.typeId) ?? [];
+        list.push(n);
+        byType.set(n.typeId, list);
+      }
+      for (const [typeId, typeNodes] of byType) {
+        lines.push(`### ${typeId}`);
+        for (const n of typeNodes) {
+          const maturity = n.maturity === 'registered' ? '✓' : n.maturity === 'confirmed' ? '●' : '○';
+          lines.push(`- ${maturity} ${n.label}${n.description ? ` — ${n.description}` : ''}`);
+        }
+        lines.push('');
+      }
+
+      if (data.edges.length > 0) {
+        lines.push('### 空间关系');
+        for (const e of data.edges) {
+          const src = data.nodes.find((n: { id: string; label: string }) => n.id === e.sourceNodeId)?.label ?? e.sourceNodeId;
+          const tgt = data.nodes.find((n: { id: string; label: string }) => n.id === e.targetNodeId)?.label ?? e.targetNodeId;
+          lines.push(`- ${src} →[${e.typeId}]→ ${tgt} (${e.layer})`);
+        }
+      }
+    }
+
+    return this.ok({
+      nodeCount: data.nodes.length,
+      edgeCount: data.edges.length,
       mode,
       markdown: lines.join('\n'),
     });

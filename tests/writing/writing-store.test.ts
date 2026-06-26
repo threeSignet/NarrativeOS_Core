@@ -26,7 +26,7 @@ describe('WritingStore 建表验证', () => {
   // 建表验证 — 确认 11 张表全部创建
   // =============================================================================
 
-  it('16 张表全部创建成功（13 原 + 3 Phase 8）', () => {
+  it('19 张表全部创建成功（13 原 + 3 Phase 8 + 3 Phase 9）', () => {
     const tables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'writing_%' ORDER BY name"
     ).all() as Array<{ name: string }>;
@@ -50,7 +50,11 @@ describe('WritingStore 建表验证', () => {
     expect(names).toContain('writing_relations');
     expect(names).toContain('writing_associations');
     expect(names).toContain('writing_relation_hints');
-    expect(tables.length).toBe(16);
+    // Phase 9：空间节点 + 空间边 + 空间视图
+    expect(names).toContain('writing_spatial_nodes');
+    expect(names).toContain('writing_spatial_edges');
+    expect(names).toContain('writing_spatial_views');
+    expect(tables.length).toBe(19);
   });
 
   // =============================================================================
@@ -90,12 +94,11 @@ describe('WritingStore 建表验证', () => {
     expect(found).toBeUndefined(); // 查询自动过滤 deleted_at
   });
 
-  it('软删除作品项目级联清理 Phase 8 三张表（防孤儿行）', () => {
-    // P0-1 回归测试：此前 softDeleteProject 遗漏 writing_relations/associations/relation_hints，
-    // 导致删除项目后这三张表留下孤儿行。验证级联软删后，list 方法（deleted_at IS NULL 过滤）返回空。
-    const project = store.createProject('含关系的作品');
+  it('软删除作品项目级联清理 Phase 8+9 六张表（防孤儿行）', () => {
+    // P0-1 回归测试：softDeleteProject 必须覆盖所有子表，防止孤儿行。
+    const project = store.createProject('含关系和空间的作品');
 
-    // 填充三张 Phase 8 表
+    // 填充 Phase 8 三张表
     store.createRelationCandidate(project.id, {
       sourceEntityId: 'ent_a', targetEntityId: 'ent_b',
       relationTypeId: 'allied_with', layer: 'world', direction: 'directed',
@@ -108,19 +111,31 @@ describe('WritingStore 建表验证', () => {
     store.createRelationHint(project.id, {
       sourceEntityId: 'ent_a', targetEntityId: 'ent_c', summary: '疑似师徒',
     });
+    // 填充 Phase 9 三张表
+    const node = store.createSpatialNode(project.id, { label: '青云门', typeId: 'sect_domain' });
+    store.createSpatialEdge(project.id, {
+      sourceNodeId: node.id, targetNodeId: node.id, typeId: 'contains', layer: 'world',
+    });
+    store.createSpatialView(project.id, { name: '修仙世界地图' });
 
-    // 删除前：三张表均有数据
+    // 删除前：六张表均有数据
     expect(store.listRelationCandidates(project.id)).toHaveLength(1);
     expect(store.listAssociations(project.id)).toHaveLength(1);
     expect(store.listRelationHints(project.id)).toHaveLength(1);
+    expect(store.listSpatialNodes(project.id)).toHaveLength(1);
+    expect(store.listSpatialEdges(project.id)).toHaveLength(1);
+    expect(store.listSpatialViews(project.id)).toHaveLength(1);
 
     // 执行软删除
     store.softDeleteProject(project.id);
 
-    // 删除后：三张表均被级联软删（list 过滤 deleted_at IS NULL → 返回空）
+    // 删除后：六张表均被级联软删
     expect(store.listRelationCandidates(project.id)).toHaveLength(0);
     expect(store.listAssociations(project.id)).toHaveLength(0);
     expect(store.listRelationHints(project.id)).toHaveLength(0);
+    expect(store.listSpatialNodes(project.id)).toHaveLength(0);
+    expect(store.listSpatialEdges(project.id)).toHaveLength(0);
+    expect(store.listSpatialViews(project.id)).toHaveLength(0);
   });
 
   // =============================================================================

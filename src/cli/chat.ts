@@ -30,7 +30,9 @@ import {
   handleIdeaAdd, handleIdeaDiscard, handleGoalAdd, handleDraftAdd, handleDraftAbandon,
   handleEntityDeprecate, handleBlueprintGenerate, handleBlueprintAccept,
   handleBlueprintAcceptSuggestion, handleBlueprintRejectSuggestion,
+  handleBlueprintAddSpatialType,
   handleGraph, handleRelation, handleAssociation,
+  handleSpatial, handleMap,
   type CliDeps,
 } from './command-handlers.js';
 // 项目选择器（每项目独立 db 文件）
@@ -179,8 +181,16 @@ const { GraphService } = await import('../writing/services/graph-service.js');
 const relationService = new RelationService(writingStore, auditService, workflowService, coreBridge);
 const graphService = new GraphService(writingStore, coreBridge);
 
+// Phase 9：空间服务
+const { SpatialService } = await import('../writing/services/spatial-service.js');
+const { SpatialViewService } = await import('../writing/services/spatial-view-service.js');
+const spatialService = new SpatialService(writingStore, auditService, workflowService, coreBridge);
+const spatialViewService = new SpatialViewService(writingStore);
+
 // 延迟注入实体检测服务到 ToolRouter（detect_entity_hints 工具需要；entityService/writingProjectId 此时就绪）
 toolRouter.setEntityService(entityService, writingProjectId);
+toolRouter.setGraphServices(relationService, graphService, writingProjectId);
+toolRouter.setSpatialServices(spatialService, spatialViewService, writingProjectId);
 
 // Agent
 const llm = new DeepSeekLLMClientAdapter();
@@ -278,7 +288,9 @@ const cliDeps: CliDeps = {
   writingStore,
   // Phase 8（用 unknown 注入——CliDeps 接口未声明这俩字段，handler 用类型擦除访问）
   relationService, graphService,
-} as CliDeps & { relationService: unknown; graphService: unknown };
+  // Phase 9：空间服务
+  spatialService, spatialViewService,
+} as CliDeps & { relationService: unknown; graphService: unknown; spatialService: unknown; spatialViewService: unknown };
 
 /** 把 handler 返回的输出行打印出来（统一 IO） */
 function printLines(lines: string[]): void {
@@ -331,12 +343,13 @@ async function handleCommand(input: string): Promise<boolean> {
       return false;
     }
     case '/blueprint': {
-      // /blueprint 子命令分发（generate/accept/accept-suggestion/reject-suggestion/查看）
+      // /blueprint 子命令分发（generate/accept/accept-suggestion/reject-suggestion/add-spatial-type/查看）
       const sub = parsed.positional[0];
       if (sub === 'generate') { printLines(handleBlueprintGenerate(cliDeps, { ...parsed, positional: parsed.positional.slice(1) })); return false; }
       if (sub === 'accept') { printLines(handleBlueprintAccept(cliDeps, { ...parsed, positional: parsed.positional.slice(1) })); return false; }
       if (sub === 'accept-suggestion') { printLines(handleBlueprintAcceptSuggestion(cliDeps, { ...parsed, positional: parsed.positional.slice(1) })); return false; }
       if (sub === 'reject-suggestion') { printLines(handleBlueprintRejectSuggestion(cliDeps, { ...parsed, positional: parsed.positional.slice(1) })); return false; }
+      if (sub === 'add-spatial-type') { printLines(handleBlueprintAddSpatialType(cliDeps, { ...parsed, positional: parsed.positional.slice(1) })); return false; }
       // 无子命令 → 走查看
       printLines(handleBlueprint(cliDeps, parsed)); return false;
     }
@@ -344,6 +357,9 @@ async function handleCommand(input: string): Promise<boolean> {
     case '/graph': printLines(await handleGraph(cliDeps, parsed)); return false;
     case '/relation': printLines(await handleRelation(cliDeps, parsed)); return false;
     case '/association': printLines(handleAssociation(cliDeps, parsed)); return false;
+    // Phase 9：空间命令
+    case '/spatial': printLines(await handleSpatial(cliDeps, parsed)); return false;
+    case '/map': printLines(await handleMap(cliDeps, parsed)); return false;
   }
 
   switch (cmd) {
@@ -382,6 +398,13 @@ async function handleCommand(input: string): Promise<boolean> {
     /project [set <字段> <值>]   项目元信息（标题/前提/状态/模式）
     /goals [--status S]    作者目标
     /audit [--limit N] [--result R]   审计日志
+
+  \x1b[1;33m空间\x1b[0m
+    /map                   地图概览（空间节点+边）
+    /spatial               空间节点/边列表
+    /spatial add-node <名> <类型> [描述]   添加空间节点
+    /spatial add-edge <源> <目标> <类型>   添加空间边
+    /spatial confirm-edge <id>             确认空间边
 
   \x1b[1;33m系统\x1b[0m
     /state                 总览面板（计数 + 导航）

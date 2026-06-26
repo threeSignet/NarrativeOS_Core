@@ -620,7 +620,7 @@ export interface RelationDetectionHint {
 // ---------------------------------------------------------------------------
 
 export type GraphViewMode = 'world' | 'relationship' | 'spatial' | 'timeline' | 'thread' | 'proposal' | 'custom';
-export type GraphSourceLayer = 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'view';
+export type GraphSourceLayer = 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'spatial' | 'view';
 
 export interface GraphNodeView {
   id: string;
@@ -674,4 +674,98 @@ export interface GraphView {
   edges: GraphEdgeView[];
   filters: GraphFilterState;
   layout: GraphLayoutState;
+}
+
+// =============================================================================
+// Phase 9：空间节点 / 空间边 / 空间视图（Feature-Spec §9.2-§9.4）
+// =============================================================================
+
+/** 空间节点成熟度（hint→candidate→confirmed→registered） */
+export type SpatialNodeMaturity = 'hint' | 'candidate' | 'confirmed' | 'registered';
+
+/** 空间节点状态 */
+export type SpatialNodeStatus = 'active' | 'deprecated' | 'merged';
+
+/** 空间边状态（candidate→confirmed→submitted→committed 或 archived） */
+export type SpatialEdgeStatus = 'candidate' | 'confirmed' | 'submitted' | 'committed' | 'archived';
+
+/** 空间边分层（对齐 RelationLayer 模式） */
+export type SpatialEdgeLayer = 'world' | 'authoring' | 'analysis' | 'view';
+
+/** 空间边方向 */
+export type SpatialEdgeDirection = 'directed' | 'bidirectional' | 'undirected' | 'hierarchical';
+
+/** 空间通行规则（可选） */
+export interface SpatialTraversalRule {
+  passable: boolean;
+  condition?: string;
+}
+
+/**
+ * 写作层空间节点——地点/空间层/区域/房间/宇宙分支/舰船舱段/梦境层等
+ * 空间类型由 ProjectBlueprint.spatialNodeTypes 定义，不硬编码
+ *
+ * Feature-Spec §9.2
+ */
+export interface WritingSpatialNode {
+  id: string;
+  projectId: string;
+  label: string;
+  /** 引用 ProjectBlueprint.spatialNodeTypes[].id */
+  typeId: string;
+  aliases: string[];
+  description?: string;
+  sourceRefs: SourceRef[];
+  maturity: SpatialNodeMaturity;
+  status: SpatialNodeStatus;
+  /** 可选注册 Core Entity（confirmed 后可注册） */
+  coreEntityId?: string;
+  properties: Record<string, unknown>;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/**
+ * 写作层空间边——空间节点之间的关系
+ * 空间边类型由 ProjectBlueprint.spatialEdgeTypes 定义
+ *
+ * Feature-Spec §9.3
+ */
+export interface WritingSpatialEdge {
+  id: string;
+  projectId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  /** 引用 ProjectBlueprint.spatialEdgeTypes[].id */
+  typeId: string;
+  layer: SpatialEdgeLayer;
+  direction: SpatialEdgeDirection;
+  traversal?: SpatialTraversalRule;
+  sourceRefs: SourceRef[];
+  status: SpatialEdgeStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/**
+ * 空间视图——布局状态，不写 Core
+ * 支持多种视图模式：graph/tree/plane/layered
+ *
+ * Feature-Spec §9.4
+ */
+export interface SpatialView {
+  id: string;
+  projectId: string;
+  name: string;
+  rootSpatialNodeId?: string;
+  layerIds: string[];
+  mode: 'graph' | 'tree' | 'plane' | 'layered';
+  positions: Record<string, { x: number; y: number; z?: number }>;
+  filters: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }

@@ -130,6 +130,8 @@ export interface CliDeps {
     acceptBlueprintDraft(ctx: WritingRequestContext, blueprintId: string): unknown;
     acceptBlueprintChange(ctx: WritingRequestContext, suggestionId: string): unknown;
     rejectBlueprintChange(ctx: WritingRequestContext, suggestionId: string, reason?: string): unknown;
+    addSpatialNodeType(ctx: WritingRequestContext, params: { id: string; label: string; description?: string }): unknown;
+    addSpatialEdgeType(ctx: WritingRequestContext, params: { id: string; label: string; description?: string }): unknown;
   };
   workflowService: {
     listPendingDecisions(ctx: WritingRequestContext): unknown[];
@@ -987,6 +989,142 @@ export function handleAssociation(deps: CliDeps, cmd: ParsedCommand): HandlerRes
     const assocs = rs.listAssociations(ctx);
     lines.push(`${C.boldYellow}📎 创作关联（${assocs.length} 条）${C.reset}`);
     for (const a of assocs) { lines.push(`  [${a.status}] ${a.label} ${C.gray}(${a.id})${C.reset}`); }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+// ===========================================================================
+// Phase 9：/spatial + /map 命令
+// ===========================================================================
+
+/** /spatial add-node|add-edge|list|node */
+export async function handleSpatial(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const sub = cmd.positional[0];
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ss = (deps as any).spatialService as {
+    createSpatialNode: (ctx: unknown, p: { label: string; typeId: string; description?: string }) => { id: string; label: string; maturity: string };
+    createSpatialEdge: (ctx: unknown, p: { sourceNodeId: string; targetNodeId: string; typeId: string }) => { id: string; status: string };
+    advanceSpatialNodeMaturity: (ctx: unknown, id: string, m: string) => unknown;
+    confirmSpatialEdge: (ctx: unknown, id: string) => unknown;
+    archiveSpatialEdge: (ctx: unknown, id: string) => void;
+  } | undefined;
+
+  if (!ss) { lines.push(`${C.red}❌ SpatialService 未注入${C.reset}`); return lines; }
+
+  if (sub === 'add-node') {
+    const [label, typeId] = cmd.positional.slice(1);
+    if (!label || !typeId) { lines.push(`${C.yellow}用法：/spatial add-node <名称> <类型id> [描述]${C.reset}`); return lines; }
+    const desc = cmd.positional[2];
+    try {
+      const node = ss.createSpatialNode(ctx, { label, typeId, description: desc });
+      lines.push(`${C.green}✅ 空间节点已创建${C.reset}`);
+      lines.push(`  ${C.gray}id: ${node.id} | label: ${node.label} | maturity: ${node.maturity}${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  if (sub === 'add-edge') {
+    const [sourceId, targetId, typeId] = cmd.positional.slice(1);
+    if (!sourceId || !targetId || !typeId) { lines.push(`${C.yellow}用法：/spatial add-edge <源节点id> <目标节点id> <类型id>${C.reset}`); return lines; }
+    try {
+      const edge = ss.createSpatialEdge(ctx, { sourceNodeId: sourceId, targetNodeId: targetId, typeId });
+      lines.push(`${C.green}✅ 空间边已创建${C.reset}`);
+      lines.push(`  ${C.gray}id: ${edge.id} | status: ${edge.status}${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  if (sub === 'confirm-edge') {
+    const edgeId = cmd.positional[1];
+    if (!edgeId) { lines.push(`${C.yellow}用法：/spatial confirm-edge <边id>${C.reset}`); return lines; }
+    try { ss.confirmSpatialEdge(ctx, edgeId); lines.push(`${C.green}✅ 空间边已确认${C.reset}`); }
+    catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  // 默认 list
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const store = (deps as any).writingStore as { listSpatialNodes: (pid: string) => Array<{ id: string; label: string; typeId: string; maturity: string }>; listSpatialEdges: (pid: string) => Array<{ id: string; sourceNodeId: string; targetNodeId: string; typeId: string; status: string }> };
+  if (!store) { lines.push(`${C.red}❌ WritingStore 未注入${C.reset}`); return lines; }
+  const nodes = store.listSpatialNodes(deps.projectId);
+  const edges = store.listSpatialEdges(deps.projectId);
+  lines.push(`${C.boldYellow}🗺️ 空间视图（${nodes.length} 节点，${edges.length} 边）${C.reset}`);
+  for (const n of nodes) {
+    const m = n.maturity === 'registered' ? '✓' : n.maturity === 'confirmed' ? '●' : '○';
+    lines.push(`  ${m} ${n.label} [${n.typeId}] ${C.gray}(${n.id})${C.reset}`);
+  }
+  if (edges.length > 0) {
+    lines.push(`\n  ${C.gray}空间边：${edges.length} 条${C.reset}`);
+    for (const e of edges) {
+      const src = nodes.find(n => n.id === e.sourceNodeId)?.label ?? e.sourceNodeId;
+      const tgt = nodes.find(n => n.id === e.targetNodeId)?.label ?? e.targetNodeId;
+      lines.push(`  ${src} →[${e.typeId}]→ ${tgt} ${C.gray}(${e.status})${C.reset}`);
+    }
+  }
+  lines.push(`\n  ${C.gray}子命令：/spatial add-node <名> <类型> | /spatial add-edge <源> <目标> <类型> | /spatial confirm-edge <id>${C.reset}`);
+  return lines;
+}
+
+/** /map — 地图概览（调用 GraphService spatial 模式） */
+export async function handleMap(deps: CliDeps, _cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const graphService = (deps as any).graphService as {
+    buildGraphView: (ctx: unknown, mode: string) => Promise<{ nodes: unknown[]; edges: unknown[] }>;
+  } | undefined;
+
+  if (!graphService) { lines.push(`${C.red}❌ GraphService 未注入${C.reset}`); return lines; }
+
+  try {
+    const graph = await graphService.buildGraphView(ctx, 'spatial');
+    lines.push(`${C.boldYellow}🗺️ 地图视图${C.reset}`);
+    lines.push(`  节点：${graph.nodes.length} 个 | 边：${graph.edges.length} 条`);
+
+    if (graph.nodes.length === 0) {
+      lines.push(`\n  ${C.gray}暂无空间节点。用 /spatial add-node 或 Agent 对话创建。${C.reset}`);
+    } else {
+      const byType = new Map<string, number>();
+      for (const n of graph.nodes as Array<{ projectTypeLabel: string }>) {
+        byType.set(n.projectTypeLabel, (byType.get(n.projectTypeLabel) ?? 0) + 1);
+      }
+      lines.push(`  类型：${[...byType].map(([k, v]) => `${k}=${v}`).join(' / ')}`);
+    }
+
+    lines.push(`\n  ${C.gray}提示：/spatial list 查看完整列表，/graph 切换到关系图${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /blueprint add-spatial-type node|edge <id> <label> [描述] */
+export function handleBlueprintAddSpatialType(deps: CliDeps, cmd: ParsedCommand): HandlerResult {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  const [kind, id, label] = cmd.positional;
+
+  if (!kind || !id || !label) {
+    lines.push(`${C.yellow}用法：/blueprint add-spatial-type node|edge <类型id> <人话标签> [描述]${C.reset}`);
+    lines.push(`  ${C.gray}示例：/blueprint add-spatial-type node realm 修仙界域${C.reset}`);
+    lines.push(`  ${C.gray}示例：/blueprint add-spatial-type edge contains 包含${C.reset}`);
+    return lines;
+  }
+
+  const desc = cmd.positional[3];
+
+  try {
+    if (kind === 'node') {
+      deps.blueprintService.addSpatialNodeType(ctx, { id, label, description: desc });
+      lines.push(`${C.green}✅ 空间节点类型已添加到蓝图${C.reset}`);
+      lines.push(`  ${C.gray}id: ${id} | label: ${label}${C.reset}`);
+    } else if (kind === 'edge') {
+      deps.blueprintService.addSpatialEdgeType(ctx, { id, label, description: desc });
+      lines.push(`${C.green}✅ 空间边类型已添加到蓝图${C.reset}`);
+      lines.push(`  ${C.gray}id: ${id} | label: ${label}${C.reset}`);
+    } else {
+      lines.push(`${C.yellow}kind 必须是 node 或 edge${C.reset}`);
+    }
   } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
   return lines;
 }

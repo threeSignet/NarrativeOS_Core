@@ -171,6 +171,72 @@ export class BlueprintService {
     return suggestion;
   }
 
+  // ===========================================================================
+  // Phase 9：空间类型管理
+  // ===========================================================================
+
+  /** 向蓝图添加空间节点类型（Agent/CLI 调用） */
+  addSpatialNodeType(
+    ctx: WritingRequestContext,
+    params: { id: string; label: string; description?: string; aliases?: string[]; examples?: string[] },
+  ): BlueprintTypeDef {
+    return this.addSpatialType(ctx, params, 'spatialNodeTypes', 'add_spatial_node_type', '空间节点类型');
+  }
+
+  /** 向蓝图添加空间边类型（Agent/CLI 调用） */
+  addSpatialEdgeType(
+    ctx: WritingRequestContext,
+    params: { id: string; label: string; description?: string; aliases?: string[]; examples?: string[] },
+  ): BlueprintTypeDef {
+    return this.addSpatialType(ctx, params, 'spatialEdgeTypes', 'add_spatial_edge_type', '空间边类型');
+  }
+
+  /** 空间类型添加的共享逻辑 */
+  private addSpatialType(
+    ctx: WritingRequestContext,
+    params: { id: string; label: string; description?: string; aliases?: string[]; examples?: string[] },
+    field: 'spatialNodeTypes' | 'spatialEdgeTypes',
+    auditAction: string,
+    typeName: string,
+  ): BlueprintTypeDef {
+    let blueprint = this.store.getActiveBlueprint(ctx.projectId);
+    if (!blueprint) {
+      blueprint = this.store.createBlueprint(ctx.projectId, {
+        maturity: 'evolving',
+        sourceRefs: ctx.sourceRefs,
+      });
+    }
+
+    const existing = blueprint[field] ?? [];
+    if (existing.some(t => t.id === params.id)) {
+      throw new Error(`${typeName} '${params.id}' 已存在于蓝图 ${blueprint.id}`);
+    }
+
+    const typeDef: BlueprintTypeDef = {
+      id: params.id,
+      label: params.label,
+      description: params.description,
+      aliases: params.aliases ?? [],
+      examples: params.examples ?? [],
+      status: 'accepted',
+      sourceRefs: ctx.sourceRefs,
+    };
+
+    this.store.updateBlueprint(blueprint.id, blueprint.version, {
+      [field]: [...existing, typeDef],
+      maturity: blueprint.maturity === 'active' ? 'evolving' : blueprint.maturity,
+    });
+
+    this.audit.record(ctx, {
+      action: auditAction,
+      targetType: 'blueprint',
+      targetId: blueprint.id,
+      detail: { typeId: params.id, label: params.label },
+    });
+
+    return typeDef;
+  }
+
   /**
    * 接受蓝图变更建议
    *

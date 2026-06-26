@@ -28,6 +28,7 @@ import type { WritingRequestContext } from './context.js';
 import type {
   GraphView, GraphNodeView, GraphEdgeView, GraphFilterState, GraphLayoutState,
   GraphViewMode, GraphSourceLayer, WritingObjectRef,
+  WritingSpatialNode, WritingSpatialEdge,
 } from '../models/types.js';
 
 export class GraphService {
@@ -204,6 +205,24 @@ export class GraphService {
       });
     }
 
+    // ---- 5b. 从空间节点构建边 + 补充节点 ----
+    const spatialEdges = this.store.listSpatialEdges(projectId, { status: 'confirmed' });
+    const spatialEdgeTypeMap = this.buildSpatialEdgeLabelMap(projectId);
+    for (const se of spatialEdges) {
+      // 确保两端节点存在（空间节点直接加入 nodeMap）
+      this.ensureSpatialNode(nodeMap, se.sourceNodeId, projectId);
+      this.ensureSpatialNode(nodeMap, se.targetNodeId, projectId);
+
+      edges.push({
+        id: se.id,
+        label: spatialEdgeTypeMap.get(se.typeId) ?? se.typeId,
+        sourceNodeId: se.sourceNodeId,
+        targetNodeId: se.targetNodeId,
+        sourceLayer: 'spatial',
+        direction: se.direction === 'bidirectional' ? 'undirected' : 'directed',
+      });
+    }
+
     // ---- 6. 按 mode 过滤 ----
     let filteredNodes = [...nodeMap.values()];
     let filteredEdges = edges;
@@ -213,6 +232,13 @@ export class GraphService {
       const characterNodeIds = new Set(filteredNodes.filter(n => n.projectTypeLabel.includes('角色')).map(n => n.id));
       filteredNodes = filteredNodes.filter(n => characterNodeIds.has(n.id));
       filteredEdges = filteredEdges.filter(e => characterNodeIds.has(e.sourceNodeId) && characterNodeIds.has(e.targetNodeId));
+    }
+
+    if (mode === 'spatial') {
+      // 空间模式：只保留空间节点 + 空间边
+      const spatialNodeIds = new Set(filteredNodes.filter(n => n.sourceLayer === 'spatial').map(n => n.id));
+      filteredNodes = filteredNodes.filter(n => spatialNodeIds.has(n.id));
+      filteredEdges = filteredEdges.filter(e => e.sourceLayer === 'spatial');
     }
 
     // ---- 7. 构建空布局（前端填充） ----
@@ -300,6 +326,47 @@ export class GraphService {
       tags: sketch.tags && sketch.tags.length > 0 ? sketch.tags : undefined,
       attributes: attributes?.get(entityId),
     });
+  }
+
+  /** 确保空间节点存在于 nodeMap（从 writing_spatial_nodes 创建） */
+  private ensureSpatialNode(
+    nodeMap: Map<string, GraphNodeView>,
+    nodeId: string,
+    projectId: string,
+  ): void {
+    if (nodeMap.has(nodeId)) return;
+    const node = this.store.getSpatialNode(nodeId);
+    if (!node) return;
+
+    const sourceLayer: GraphSourceLayer = 'spatial';
+    nodeMap.set(nodeId, {
+      id: node.id,
+      label: node.label,
+      objectRef: { objectType: 'entity', objectId: node.id },
+      sourceLayer,
+      projectTypeLabel: node.typeId,
+      statusLabel: node.maturity,
+      coreEntityId: node.coreEntityId,
+      summary: node.description,
+    });
+  }
+
+  /** 从蓝图 spatialEdgeTypes 构建 typeId → 人话 label 映射 */
+  private buildSpatialEdgeLabelMap(projectId: string): Map<string, string> {
+    const map = new Map<string, string>();
+    try {
+      const bp = this.store.getLatestBlueprint(projectId) as
+        | { spatialEdgeTypes?: Array<{ id: string; label: string }> }
+        | undefined;
+      if (bp?.spatialEdgeTypes) {
+        for (const et of bp.spatialEdgeTypes) {
+          map.set(et.id, et.label);
+        }
+      }
+    } catch {
+      // 蓝图查询失败用空映射兜底
+    }
+    return map;
   }
 
   /**

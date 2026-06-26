@@ -66,21 +66,21 @@ describe('ToolRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('基础功能', () => {
-    it('getDefinitions() 应返回 13 个工具定义（含 detect_entity_hints + Phase 8 关系工具）', () => {
+    it('getDefinitions() 应返回 15 个工具定义（含 Phase 8 关系工具 + Phase 9 空间工具）', () => {
       const defs = router.getDefinitions();
-      expect(defs).toHaveLength(13);
+      expect(defs).toHaveLength(15);
       const names = defs.map(d => d.name).sort();
       expect(names).toEqual([
         'commit_event', 'commit_retcon', 'commit_schema_extension',
-        'detect_entity_hints', 'detect_relation_hints',
-        'get_context_slice', 'get_graph_view', 'get_open_threads',
+        'detect_entity_hints', 'detect_relation_hints', 'detect_spatial_nodes',
+        'get_context_slice', 'get_graph_view', 'get_open_threads', 'get_spatial_view',
         'propose_event', 'propose_retcon', 'propose_schema_extension',
         'register_entity', 'resolve_thread',
       ]);
     });
 
     it('toolNames() 应返回 13 个名称', () => {
-      expect(router.toolNames()).toHaveLength(13);
+      expect(router.toolNames()).toHaveLength(15);
     });
 
     it('每个 ToolDefinition 应有 name/description/parameters', () => {

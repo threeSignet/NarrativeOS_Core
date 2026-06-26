@@ -287,3 +287,50 @@ export function validateRelationCandidateTransition(
     );
   }
 }
+
+// ===========================================================================
+// Phase 9：空间节点成熟度 + 空间边状态机
+// ===========================================================================
+
+/** 空间节点成熟度转换：hint→candidate→confirmed→registered（单向递进） */
+const SPATIAL_NODE_MATURITY_TRANSITIONS: Record<string, string[]> = {
+  hint: ['candidate'],
+  candidate: ['confirmed'],
+  confirmed: ['registered'],
+  registered: [],
+};
+
+export function validateSpatialNodeMaturity(
+  currentMaturity: string, targetMaturity: string, nodeId: string,
+): void {
+  if (currentMaturity === targetMaturity) return;
+  const allowed = SPATIAL_NODE_MATURITY_TRANSITIONS[currentMaturity];
+  if (!allowed || !allowed.includes(targetMaturity)) {
+    throw new StateMachineError(
+      WritingErrorCode.INVALID_STATUS_TRANSITION,
+      currentMaturity, targetMaturity, 'WritingSpatialNode', nodeId,
+    );
+  }
+}
+
+/** 空间边状态转换 */
+const SPATIAL_EDGE_STATUS_TRANSITIONS: Record<string, string[]> = {
+  candidate: ['confirmed', 'archived'],
+  confirmed: ['submitted', 'archived'],
+  submitted: ['committed', 'archived'],
+  committed: [],
+  archived: [],
+};
+
+export function validateSpatialEdgeStatus(
+  currentStatus: string, targetStatus: string, edgeId: string,
+): void {
+  if (currentStatus === targetStatus) return;
+  const allowed = SPATIAL_EDGE_STATUS_TRANSITIONS[currentStatus];
+  if (!allowed || !allowed.includes(targetStatus)) {
+    throw new StateMachineError(
+      WritingErrorCode.INVALID_STATUS_TRANSITION,
+      currentStatus, targetStatus, 'WritingSpatialEdge', edgeId,
+    );
+  }
+}
