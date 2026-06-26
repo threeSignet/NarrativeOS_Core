@@ -55,22 +55,24 @@
 
 ---
 
-## 各模块完成度基线（2026-06-25，Phase 8 审核后）
+## 各模块完成度基线（2026-06-25，Phase 9 交付后）
 
 | 写作层模块 | 完成度 | 主缺口 |
 |---|---|---|
-| 存储/DDL/类型/状态机 | ~100% | Phase 8 三表（writing_relations/associations/relation_hints）+ softDeleteProject 级联 + updateRelationCandidate 乐观锁已闭合 |
-| EntityService | ~95% | W4/W16/W17 已闭合；Phase 8 图谱化增强（attributes/summary/tags）|
+| 存储/DDL/类型/状态机 | ~100% | Phase 9 新增 3 空间表 + 状态机；softDeleteProject 级联覆盖 19 张表 |
+| EntityService | ~95% | W4/W16/W17 已闭合；Phase 8 图谱化增强已闭合 |
 | IdeaService | ~85% | discard/restore 绕状态机 |
 | DraftService | ~95% | W7/W10-c/W15 已闭合 |
-| BlueprintService | ~80% | 类型提取脆弱 |
+| BlueprintService | ~90% | 空间类型管理（addSpatialNodeType/EdgeType）已闭合；类型提取脆弱待改进 |
 | ProjectService | ~95% | W10-b/W12 已闭合 |
-| RelationService | ~100% | Phase 8 新增：关系候选/创作关联/检测提示 CRUD + 状态机 + 提交 Core |
-| GraphService | ~95% | Phase 8 新增：buildGraphView + exportGraph + loadEntityAttributes；测试补全 7 用例 |
-| CoreBridge | ~90% | 4 新通道（thread/knowledge/worldPackage/retcon）审计补全（sourceRefs/writebackError/createCoreRef/partial）已闭合 |
-| Agent §8 改造 | ~90% | W1/W13/W2 已闭合；Tool 12 detect_relation_hints + Tool 13 get_graph_view 已接入 |
-| ViewModel/过滤 | ~90% | W6/W7/W8 已闭合；WRITING_TABLE_NAMES 补全 Phase 8 三表 |
-| Error 模型 | ~90% | W11 已闭合；tool-router 输入校验补全 |
-| 测试 | ~100% | 815 测试全绿，0 skipped；Phase 8 核心测试（agent-tools/corebridge-channels/relations）已补全 |
+| RelationService | ~100% | Phase 8 全功能 |
+| SpatialService | ~100% | Phase 9 新增：节点/边/视图 CRUD + 状态机 + CoreBridge 集成 |
+| SpatialViewService | ~95% | Phase 9 新增：树状视图 + JSON 导出；parentEdgeTypeIds 参数化 |
+| GraphService | ~95% | Phase 8+9：buildGraphView 含空间投影 + spatial 模式过滤 |
+| CoreBridge | ~90% | Phase 8 四通道已闭合；SpatialService.registerToCore 接入 |
+| Agent §8 改造 | ~95% | Tool 12-15 全部接入（detect_relation/graph/spatial + get_graph/spatial） |
+| ViewModel/过滤 | ~90% | WRITING_TABLE_NAMES 覆盖 19 张表 |
+| Error 模型 | ~90% | tool-router 输入校验补全（Tool 14/15） |
+| 测试 | ~100% | Phase 9 新增 16 用例（spatial-service 12 + spatial-view-service 4） |
 
-**总计**：Phase 8（Roadmap 6 项 + 扩展 3 项 + Agent 工具 2 项）→ ✅ 100% 完成。P0/P1 清零，P2 修 15/30 项（剩余 15 项为设计选择/误报/有意保留）。可进 Phase 9。
+**总计**：Phase 9（Roadmap 6 项 + Code Review 3 项修复）→ ✅ 100% 完成。可进 Phase 10。
