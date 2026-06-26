@@ -337,6 +337,133 @@ describe('Phase 8 · GraphView 投影', () => {
     expect(graphml).toContain('<graphml');
     expect(graphml).toContain('<node');
   });
+
+  it('loadEntityAttributes：已注册实体加载 scalar 属性', async () => {
+    const sketchA = store.createEntitySketch(ctx.projectId, { displayName: '韩立', typeLabel: '角色' });
+    db.prepare("UPDATE writing_entity_sketches SET core_entity_id = ?, status = 'registered' WHERE id = ?").run('ent_hl', sketchA.id);
+    // 插入 scalar Fact（realm/location 是 DISPLAY_PREDICATES）
+    db.prepare("INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES (?, ?, ?, ?)").run('ent_hl', '韩立', 'character', 1);
+    db.prepare("INSERT OR IGNORE INTO events (id, type, chapter, description, params_json, fact_group_id) VALUES (?, 'seed', 1, 'seed', '{}', 'fg1')").run('evt1');
+    db.prepare(`INSERT INTO facts (id, subject, predicate, value_type, value_scalar, certainty, cause_event, valid_from, context, embedding_text)
+      VALUES (?, ?, ?, 'scalar', ?, 'canonical', ?, 1, 'global', '')`).run('fct_r1', 'ent_hl', 'realm', '筑基期', 'evt1');
+    db.prepare(`INSERT INTO facts (id, subject, predicate, value_type, value_scalar, certainty, cause_event, valid_from, context, embedding_text)
+      VALUES (?, ?, ?, 'scalar', ?, 'canonical', ?, 1, 'global', '')`).run('fct_l1', 'ent_hl', 'location', '天劫洞', 'evt1');
+
+    const graph = await graphService.buildGraphView(ctx, 'world');
+    expect(graph.nodes).toHaveLength(1);
+    const attrs = graph.nodes[0]!.attributes;
+    expect(attrs).toBeDefined();
+    expect(attrs).toHaveLength(2);
+    expect(attrs!.map(a => a.predicate)).toContain('realm');
+    expect(attrs!.map(a => a.predicate)).toContain('location');
+  });
+
+  it('loadEntityAttributes：已废弃实体不加载属性', async () => {
+    const sketchA = store.createEntitySketch(ctx.projectId, { displayName: '旧角色', typeLabel: '角色' });
+    db.prepare("UPDATE writing_entity_sketches SET core_entity_id = ?, status = 'deprecated' WHERE id = ?").run('ent_old', sketchA.id);
+    db.prepare("INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES (?, ?, ?, ?)").run('ent_old', '旧角色', 'character', 1);
+    db.prepare("INSERT OR IGNORE INTO events (id, type, chapter, description, params_json, fact_group_id) VALUES (?, 'seed', 1, 'seed', '{}', 'fg1')").run('evt2');
+    db.prepare(`INSERT INTO facts (id, subject, predicate, value_type, value_scalar, certainty, cause_event, valid_from, context, embedding_text)
+      VALUES (?, ?, ?, 'scalar', ?, 'canonical', ?, 1, 'global', '')`).run('fct_d1', 'ent_old', 'realm', '金丹期', 'evt2');
+
+    const graph = await graphService.buildGraphView(ctx, 'world');
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0]!.attributes).toBeUndefined();
+  });
+
+  it('loadEntityAttributes：非 DISPLAY_PREDICATES 被过滤', async () => {
+    const sketchA = store.createEntitySketch(ctx.projectId, { displayName: '韩立', typeLabel: '角色' });
+    db.prepare("UPDATE writing_entity_sketches SET core_entity_id = ?, status = 'registered' WHERE id = ?").run('ent_hl2', sketchA.id);
+    db.prepare("INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES (?, ?, ?, ?)").run('ent_hl2', '韩立', 'character', 1);
+    db.prepare("INSERT OR IGNORE INTO events (id, type, chapter, description, params_json, fact_group_id) VALUES (?, 'seed', 1, 'seed', '{}', 'fg1')").run('evt3');
+    // secret_predicate 不在 DISPLAY_PREDICATES 中
+    db.prepare(`INSERT INTO facts (id, subject, predicate, value_type, value_scalar, certainty, cause_event, valid_from, context, embedding_text)
+      VALUES (?, ?, ?, 'scalar', ?, 'canonical', ?, 1, 'global', '')`).run('fct_s1', 'ent_hl2', 'secret_predicate', '秘密', 'evt3');
+    // realm 在 DISPLAY_PREDICATES 中
+    db.prepare(`INSERT INTO facts (id, subject, predicate, value_type, value_scalar, certainty, cause_event, valid_from, context, embedding_text)
+      VALUES (?, ?, ?, 'scalar', ?, 'canonical', ?, 1, 'global', '')`).run('fct_r2', 'ent_hl2', 'realm', '筑基期', 'evt3');
+
+    const graph = await graphService.buildGraphView(ctx, 'world');
+    const attrs = graph.nodes[0]!.attributes;
+    expect(attrs).toHaveLength(1);
+    expect(attrs![0]!.predicate).toBe('realm');
+  });
+
+  it('多条件过滤：entityTypes + layers 组合', async () => {
+    const entityA = store.createEntitySketch(ctx.projectId, { displayName: '韩立', typeLabel: '角色' });
+    const entityB = store.createEntitySketch(ctx.projectId, { displayName: '南宫婉', typeLabel: '角色' });
+    const entityC = store.createEntitySketch(ctx.projectId, { displayName: '青云门', typeLabel: '势力' });
+    // 角色→角色 候选（world 层）
+    relationService.createRelationCandidate(ctx, {
+      sourceEntityId: entityA.id, targetEntityId: entityB.id, relationTypeId: 'spouse_of',
+    });
+    // 角色→势力 候选（world 层）
+    relationService.createRelationCandidate(ctx, {
+      sourceEntityId: entityA.id, targetEntityId: entityC.id, relationTypeId: 'member_of',
+    });
+
+    // 只看角色类型 + world 层
+    const graph = await graphService.buildGraphView(ctx, 'world', {
+      entityTypes: ['角色'],
+      layers: ['world'],
+    });
+    // entityTypes 过滤 sketch 遍历，但 ensureNode 在构建边时会补入缺失节点
+    // 所以 3 个节点都在（韩立/南宫婉/青云门），但只有 world 层的边
+    expect(graph.nodes.length).toBeGreaterThanOrEqual(2);
+    expect(graph.edges).toHaveLength(2);
+    expect(graph.edges.every(e => e.sourceLayer === 'candidate')).toBe(true);
+  });
+
+  it('archived 关联不入图', async () => {
+    const entityA = store.createEntitySketch(ctx.projectId, { displayName: 'A', typeLabel: '角色' });
+    const entityB = store.createEntitySketch(ctx.projectId, { displayName: 'B', typeLabel: '角色' });
+    const asc = store.createAssociation(ctx.projectId, {
+      sourceRef: { objectType: 'entity', objectId: entityA.id },
+      targetRef: { objectType: 'entity', objectId: entityB.id },
+      label: '临时关联',
+    });
+    // 归档
+    relationService.archiveAssociation(ctx, asc.id);
+
+    const graph = await graphService.buildGraphView(ctx, 'world');
+    expect(graph.edges).toHaveLength(0);
+  });
+
+  it('relationship 模式过滤非角色边', async () => {
+    const characterA = store.createEntitySketch(ctx.projectId, { displayName: '韩立', typeLabel: '角色' });
+    const characterB = store.createEntitySketch(ctx.projectId, { displayName: '南宫婉', typeLabel: '角色' });
+    const location = store.createEntitySketch(ctx.projectId, { displayName: '天劫洞', typeLabel: '地点' });
+    // 角色→角色 关系候选
+    relationService.createRelationCandidate(ctx, {
+      sourceEntityId: characterA.id, targetEntityId: characterB.id, relationTypeId: 'spouse_of',
+    });
+    // 角色→地点 关系候选（非角色节点，应被过滤）
+    relationService.createRelationCandidate(ctx, {
+      sourceEntityId: characterA.id, targetEntityId: location.id, relationTypeId: 'located_at',
+    });
+
+    const graph = await graphService.buildGraphView(ctx, 'relationship');
+    // 只保留角色节点
+    expect(graph.nodes).toHaveLength(2);
+    expect(graph.nodes.map(n => n.label).sort()).toEqual(['南宫婉', '韩立']);
+    // 只保留两端都是角色的边
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0]!.label).toBe('配偶');
+  });
+
+  it('自环不画：subject === target 的 Core Fact', async () => {
+    const sketchA = store.createEntitySketch(ctx.projectId, { displayName: 'A', typeLabel: '角色' });
+    db.prepare("UPDATE writing_entity_sketches SET core_entity_id = ?, status = 'registered' WHERE id = ?").run('ent_self', sketchA.id);
+    db.prepare("INSERT OR IGNORE INTO entities (id, name, kind, first_appearance) VALUES (?, ?, ?, ?)").run('ent_self', 'A', 'character', 1);
+    db.prepare("INSERT OR IGNORE INTO events (id, type, chapter, description, params_json, fact_group_id) VALUES (?, 'seed', 1, 'seed', '{}', 'fg1')").run('evt4');
+    // 自环 Fact：ent_self → ent_self
+    db.prepare(`INSERT INTO facts (id, subject, predicate, value_type, value_entity_ref, certainty, cause_event, valid_from, context, embedding_text)
+      VALUES (?, ?, ?, 'entity_ref', ?, 'canonical', ?, 1, 'global', '')`).run('fct_self', 'ent_self', 'self_ref', 'ent_self', 'evt4');
+
+    const graph = await graphService.buildGraphView(ctx, 'world');
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.edges).toHaveLength(0);
+  });
 });
 
 describe('Phase 8 · 关系候选完整提交流程（world 层 → Core）', () => {
