@@ -38,10 +38,9 @@ import type {
  * 标量 → String(value)
  */
 function formatFactValue(value: FactValue, entityNames: Record<string, string>): string {
-  if (typeof value === 'object' && value !== null && (value as any).type === 'entity_ref') {
-    const ref = value as { entityId: string };
-    const name = entityNames[ref.entityId] ?? ref.entityId;
-    return `${name}（${ref.entityId}）`;
+  if (isEntityRef(value)) {
+    const name = entityNames[value.entityId] ?? value.entityId;
+    return `${name}（${value.entityId}）`;
   }
   return String(value);
 }

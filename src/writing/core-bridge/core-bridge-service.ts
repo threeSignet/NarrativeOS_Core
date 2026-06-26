@@ -194,6 +194,34 @@ export interface CoreBridgeService {
   ): Promise<RegisterEntityResult>;
 
   // =========================================================================
+  // Phase 8：额外提交通道
+  // =========================================================================
+
+  /** 提交已审核的线索变更（resolve_thread） */
+  commitReviewedThreadChange(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult>;
+
+  /** 提交已审核的知识变更（propose_event with knowledge_changes） */
+  commitReviewedKnowledgeChange(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult>;
+
+  /** 提交已审核的 Schema 扩展（commit_schema_extension） */
+  commitReviewedWorldPackageChange(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult>;
+
+  /** 提交已审核的 Retcon（commit_retcon） */
+  commitReviewedRetcon(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult>;
+
+  // =========================================================================
   // 对账恢复（§7.11.5 两阶段提交恢复——初始化时调用）
   // =========================================================================
   // commit/register 在 Core 写入成功但写作层回写失败（result='partial'）时，写作对象会停留

@@ -18,7 +18,7 @@
 import Database from 'better-sqlite3';
 import { LanceDBTableAdapter } from '../adapters/lancedb/table-adapter.js';
 import { SiliconFlowEmbeddingService } from '../adapters/embedding/siliconflow-embedder.js';
-import type { VectorEntry } from '../types.js';
+import type { VectorEntry, Certainty } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -35,6 +35,21 @@ interface SyncQueueRow {
   max_retries: number;
   next_retry_at: string;
   last_error: string | null;
+}
+
+/** facts 表查询行类型（buildVectorEntries 用） */
+interface FactRow {
+  id: string;
+  subject: string;
+  predicate: string;
+  value_scalar: string | null;
+  value_entity_ref: string | null;
+  embedding_text: string;
+  certainty: Certainty;
+  valid_from: number;
+  valid_to: number | null;
+  is_current: number;
+  context: string;
 }
 
 /**
@@ -174,14 +189,14 @@ export class SyncQueueConsumer {
     // P1 修复：原实现分两轮循环各查一次 facts（2N 次 SELECT），且第二轮用 factIds[i] 索引——
     // 当某 factId 不存在时 texts.length < factIds.length，导致索引错位查到错误的 Fact。
     // 改为单轮查询并缓存 row，同时消除索引错位 bug。
-    const rows: any[] = [];
+    const rows: FactRow[] = [];
     const texts: string[] = [];
 
     // 读取 Fact 并构建 embedding 文本（单轮查询，缓存 row 供后续组装）
     for (const fid of factIds) {
       const row = this.db.prepare(
         'SELECT id, subject, predicate, value_scalar, value_entity_ref, embedding_text, certainty, valid_from, valid_to, is_current, context FROM facts WHERE id = ?'
-      ).get(fid) as any;
+      ).get(fid) as FactRow | undefined;
       if (!row) continue;
 
       const text = row.embedding_text || `${row.subject} ${row.predicate} ${row.value_scalar ?? row.value_entity_ref ?? ''}`;
@@ -206,7 +221,7 @@ export class SyncQueueConsumer {
         valid_from: row.valid_from,
         valid_to: row.valid_to,
         is_current: row.is_current === 1,
-        certainty: row.certainty as any,
+        certainty: row.certainty,
         context: row.context ?? 'global',
       });
     }

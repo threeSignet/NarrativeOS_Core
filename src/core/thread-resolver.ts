@@ -328,8 +328,6 @@ export class ThreadResolver {
     allThreads: NarrativeThread[],
     newEvent: NarrativeEvent,
   ): NarrativeThread[] {
-    const eventSubject = newEvent.params['subject'] as string | undefined;
-
     return allThreads.filter(thread => {
       // 只扫描渐进型线索
       if (thread.direction !== 'progressive') return false;
@@ -342,9 +340,6 @@ export class ThreadResolver {
 
       return thread.relatedEntities.some(related => eventEntities.has(related));
     });
-
-    // eventSubject 用于过滤（已在 extractEventEntities 中使用）
-    void eventSubject;
   }
 
   // -----------------------------------------------------------------------

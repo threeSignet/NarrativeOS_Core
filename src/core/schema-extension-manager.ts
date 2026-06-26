@@ -79,23 +79,46 @@ export class SchemaExtensionManager {
         if (proposal.extensionType==='predicate') {
           const e = proposal.data as PredicateExtension;
           if (this.db.prepare('SELECT name FROM wp_predicates WHERE name=?').get(e.name)) throw new Error('CONFLICT:谓词已存在');
-          this.db.prepare("INSERT INTO wp_predicates(name,display_name,value_type,enum_values,sequence_order,description,relation_kind)VALUES(?,?,?,?,?,?,?)").run(e.name,e.displayName,e.valueType,e.enumValues?JSON.stringify(e.enumValues):null,e.sequenceOrder?JSON.stringify(e.sequenceOrder):null,e.description??'',e.relationKind??'structural');
+          this.db.prepare(
+            'INSERT INTO wp_predicates(name,display_name,value_type,enum_values,sequence_order,description,relation_kind) VALUES(?,?,?,?,?,?,?)'
+          ).run(
+            e.name, e.displayName, e.valueType,
+            e.enumValues ? JSON.stringify(e.enumValues) : null,
+            e.sequenceOrder ? JSON.stringify(e.sequenceOrder) : null,
+            e.description ?? '', e.relationKind ?? 'structural',
+          );
           at.push('wp_predicates'); np.push(e.name);
         } else if (proposal.extensionType==='rule') {
           const e = proposal.data as RuleExtension;
           if (this.db.prepare('SELECT id FROM wp_rules WHERE id=?').get(e.id)) throw new Error('CONFLICT:规则ID已存在');
-          this.db.prepare("INSERT INTO wp_rules(id,type,name,description,priority,definition_json)VALUES(?,?,?,?,?,?)").run(e.id,e.type,e.name,e.description??'',e.priority??0,JSON.stringify(e.definition));
+          this.db.prepare(
+            'INSERT INTO wp_rules(id,type,name,description,priority,definition_json) VALUES(?,?,?,?,?,?)'
+          ).run(e.id, e.type, e.name, e.description ?? '', e.priority ?? 0, JSON.stringify(e.definition));
           at.push('wp_rules'); nr.push(e.id);
         } else if (proposal.extensionType==='entity_template') {
           const e = proposal.data as TemplateExtension;
           if (this.db.prepare('SELECT name FROM wp_entity_templates WHERE name=?').get(e.name)) throw new Error('CONFLICT:模板名已存在');
           if (e.extendsTemplate && !this.db.prepare('SELECT name FROM wp_entity_templates WHERE name=?').get(e.extendsTemplate)) throw new Error(`CONFLICT:父模板${e.extendsTemplate}不存在`);
-          this.db.prepare("INSERT INTO wp_entity_templates(name,kind,extends_template,default_predicates,override_predicates,description)VALUES(?,?,?,?,?,?)").run(e.name,e.kind,e.extendsTemplate??null,JSON.stringify(e.defaultPredicates),e.overridePredicates?JSON.stringify(e.overridePredicates):null,e.description??'');
+          this.db.prepare(
+            'INSERT INTO wp_entity_templates(name,kind,extends_template,default_predicates,override_predicates,description) VALUES(?,?,?,?,?,?)'
+          ).run(
+            e.name, e.kind, e.extendsTemplate ?? null,
+            JSON.stringify(e.defaultPredicates),
+            e.overridePredicates ? JSON.stringify(e.overridePredicates) : null,
+            e.description ?? '',
+          );
           at.push('wp_entity_templates');
         } else if (proposal.extensionType==='scope_preset') {
           const e = proposal.data as ScopePresetExtension;
           if (this.db.prepare('SELECT name FROM wp_scope_presets WHERE name=?').get(e.name)) throw new Error('CONFLICT:预设名已存在');
-          this.db.prepare("INSERT INTO wp_scope_presets(name,display_name,default_exit_behavior,inherits_global_rules,override_rules,description)VALUES(?,?,?,?,?,?)").run(e.name,e.displayName,e.defaultExitBehavior??'suggest_discard',e.inheritsGlobalRules?1:0,e.overrideRules?JSON.stringify(e.overrideRules):null,e.description??'');
+          this.db.prepare(
+            'INSERT INTO wp_scope_presets(name,display_name,default_exit_behavior,inherits_global_rules,override_rules,description) VALUES(?,?,?,?,?,?)'
+          ).run(
+            e.name, e.displayName, e.defaultExitBehavior ?? 'suggest_discard',
+            e.inheritsGlobalRules ? 1 : 0,
+            e.overrideRules ? JSON.stringify(e.overrideRules) : null,
+            e.description ?? '',
+          );
           at.push('wp_scope_presets');
         }
         const sq = (this.db.prepare("SELECT COUNT(*) as cnt FROM events WHERE type='schema'").get() as {cnt:number}).cnt+1;

@@ -266,12 +266,7 @@ export class RetconEngine {
     const targetContext = targetEvent.context ?? 'global';
 
     // 收集所有受影响 Fact ID
-    const allAffectedFactIds: string[] = [];
-    for (const [, facts] of bfsResult.factsByLevel) {
-      for (const f of facts) {
-        allAffectedFactIds.push(f.id);
-      }
-    }
+    const allAffectedFactIds = this.collectAffectedFactIds(bfsResult.factsByLevel);
 
     if (allAffectedFactIds.length === 0) return;
 
@@ -475,12 +470,7 @@ export class RetconEngine {
     const report = this.generateCascadeReport(cascadeResult, params.targetEventId);
 
     // 3. 收集所有受影响 Fact ID 和 Event ID
-    const affectedFactIds: string[] = [];
-    for (const [, facts] of cascadeResult.factsByLevel) {
-      for (const f of facts) {
-        affectedFactIds.push(f.id);
-      }
-    }
+    const affectedFactIds = this.collectAffectedFactIds(cascadeResult.factsByLevel);
 
     const affectedEventIds: string[] = [];
     for (const [level, eventIds] of cascadeResult.eventsByLevel) {
@@ -490,8 +480,6 @@ export class RetconEngine {
 
     // 4. 生成 proposal ID
     this.proposalCounter++;
-    const targetChapter = (cascadeResult.eventsByLevel.get(1)?.[0] ?? '').split('_').slice(-2).join('_');
-    // 从目标事件 ID 提取信息用于 proposal ID
     const targetEvent = eventStore.getById(params.targetEventId)!;
     const proposalId = `rtc_${targetEvent.type}_${targetEvent.chapter}_${String(this.proposalCounter).padStart(2, '0')}`;
 
@@ -561,12 +549,7 @@ export class RetconEngine {
     }
 
     // 2. 收集所有受影响 Fact ID（事务外准备数据）
-    const allAffectedFactIds: string[] = [];
-    for (const [, facts] of proposal.cascadeResult.factsByLevel) {
-      for (const f of facts) {
-        allAffectedFactIds.push(f.id);
-      }
-    }
+    const allAffectedFactIds = this.collectAffectedFactIds(proposal.cascadeResult.factsByLevel);
 
     // 3-9. 事务内原子写入：乐观锁 → event → contested → thread → dependencies → audit → sync_queue
     // 任一步失败自动 ROLLBACK，保证不产生半截世界状态
@@ -758,5 +741,16 @@ export class RetconEngine {
       return { status: 'failed', contestedFactCount: 0, reactivatedThreadCount: 0, cognitiveDissonanceCount: 0, contestedFactIds: [], reactivatedThreadIds: [], errorMessage: 'STALE_PROPOSAL: 状态版本冲突' };
     }
     throw err; // 其他异常向上传播
+  }
+
+  /** 从级联结果中提取所有受影响 Fact ID（三处共用） */
+  private collectAffectedFactIds(factsByLevel: Map<number, Array<{ id: string }>>): string[] {
+    const ids: string[] = [];
+    for (const [, facts] of factsByLevel) {
+      for (const f of facts) {
+        ids.push(f.id);
+      }
+    }
+    return ids;
   }
 }

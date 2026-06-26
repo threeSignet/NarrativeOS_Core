@@ -1683,6 +1683,93 @@ Phase 8（Roadmap :1549-1558）6 项 + Feature-Spec §8 的 3 个关系模型全
 - `tests/evals/run-eval.ts`（双轨检测）。
 - `tests/integration/rule-engine.test.ts`（transitionRules 1→2）。
 
+---
+
+## 2026-06-24 · Phase 7 收尾 + Phase 8 CoreBridge 提交通道 + 图谱化
+
+### 会话总览
+
+本次会话完成 Phase 7 全部收尾项 + Phase 8 两项新功能。
+
+### Phase 7 收尾
+
+#### 1. 清除所有 Mock（P1-1）
+- 删除 `src/adapters/llm/mock-llm-client.ts` + `tests/integration/mock-llm-client.test.ts`
+- 删除 `tests/agent/commit-gate.test.ts`（门控行为由 permission-check + permission-enforcement 覆盖）
+- 重写 6 个测试文件改用真实 DeepSeek LLM（writing-main-loop + 5 个 agent 测试）
+- 清除 src/tests 中全部 Mock 引用，更新 AGENTS.md/Phase7-Refinement.md 测试策略
+
+#### 2. 三热表乐观锁（P1-2）
+- DDL 加 `version INTEGER NOT NULL DEFAULT 1`（Project / ProposalView / EntitySketch）
+- Row 接口 + Type 接口 + Mapper 补 version 字段
+- 三个 update 方法支持 `expectedVersion?` 参数（向后兼容：不传无锁）
+- VERSION_CONFLICT 错误处理 + 15 个乐观锁测试
+
+#### 3. writing-loop.test.ts 清理（P1-3）
+- 删除冗余文件（9 个 skip 测试，与 writing-main-loop.test.ts 功能重复）
+- 58 文件 784 测试全绿，0 skipped
+
+#### 4. authorId 硬编码清除
+- `tool-router.ts`：`authorId: 'default'` → `authorId: this.writingProjectId`
+- `context.ts`：`authorId: partial.authorId ?? 'default'` → `partial.projectId`
+
+### Phase 8 新功能
+
+#### 5. CoreBridge 4 个提交通道
+- `commitReviewedThreadChange` → `resolve_thread`
+- `commitReviewedKnowledgeChange` → `propose_event` + `commit_event`
+- `commitReviewedWorldPackageChange` → `commit_schema_extension`
+- `commitReviewedRetcon` → `commit_retcon`
+- 每个通道：PV 校验 + Core 工具调用 + 状态回写 + 审计
+- 13 个测试（4×3 错误路径 + 1 审计验证）
+
+#### 6. WritingEntitySketch 图谱化
+- `GraphNodeView` 增加 `coreEntityId` / `summary` / `tags` / `attributes` 字段
+- `GraphService.loadEntityAttributes` 从 Core Fact 批量加载实体关键属性（realm/location/weapon 等）
+- `ensureNode` 同步更新
+
+### 验证
+- `npx tsc --noEmit` exit 0
+- 全量回归 **58 文件 797 测试全绿，0 skipped，0 failed**
+
+### 变更文件清单
+- 删除：`src/adapters/llm/mock-llm-client.ts`、`tests/integration/mock-llm-client.test.ts`、`tests/agent/commit-gate.test.ts`、`tests/integration/writing-loop.test.ts`
+- 重写：`tests/writing/writing-main-loop.test.ts`、`tests/agent/{permission-enforcement,proposal-render,world-context-injection,w13-draft-unification}.test.ts`
+- 新增：`tests/writing/phase8-corebridge-channels.test.ts`
+- 修改：`src/types/llm.ts`、`src/core/tool-router.ts`、`src/writing/services/context.ts`、`src/writing/models/types.ts`（GraphNodeView + 三热表 version）、`src/writing/repositories/writing-store.ts`（DDL + Row + Mapper + update 方法）、`src/writing/core-bridge/core-bridge-service.ts`（4 新方法）、`src/writing/core-bridge/real-bridge.ts`（4 新方法实现）、`src/writing/services/graph-service.ts`（loadEntityAttributes + ensureNode 增强）
+- 文档：`AGENTS.md`、`docs/Phase7-Refinement.md`、`docs/Phase7-Exit-Gate.md`、`docs/Writing-Layer-Gap-Register.md`、`docs/core-development-log.md`
+
+---
+
+## 2026-06-24 · Phase 8 Agent 工具接入（detect_relation_hints + get_graph_view）
+
+### 实现内容
+
+ToolRouter 新增 2 个工具（共 13 个），让 Agent 能在对话中自主发现和查询实体关系：
+
+- `detect_relation_hints`（Tool 12）：Agent 对话中识别关系，创建关系提示写入系统供作者审核
+  - 参数：hints 数组（source_entity_id/target_entity_id/summary/relation_type_id）
+  - 未注入 RelationService 时返回 INTERNAL_ERROR
+  - 通过 `setGraphServices` 延迟注入（与 detect_entity_hints 同模式）
+
+- `get_graph_view`（Tool 13）：Agent 查询实体关系图谱
+  - 参数：mode（world/relationship）、entity_filter（按类型过滤）
+  - 返回 Markdown 渲染的图谱摘要（节点按类型分组 + 关系边列表）
+  - 通过 `setGraphServices` 延迟注入
+
+### 关键修复
+- `setGraphServices` 签名增加 `writingProjectId` 参数（原缺少此参数导致 INTERNAL_ERROR）
+
+### 验证
+- `npx tsc --noEmit` exit 0
+- 新增 `tests/writing/phase8-agent-tools.test.ts`（10 测试）
+- `tests/integration/tool-router.test.ts` 断言更新（11→13 工具）
+- 全量回归 **59 文件 807 测试全绿，0 skipped**
+
+### 变更文件
+- 修改：`src/core/tool-router.ts`（+setGraphServices + 2 工具定义 + 2 handler）、`tests/integration/tool-router.test.ts`（断言 11→13）
+- 新增：`tests/writing/phase8-agent-tools.test.ts`
+
 
 
 

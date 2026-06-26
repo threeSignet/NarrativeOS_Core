@@ -83,9 +83,9 @@
 
 **Phase 8 范围（启动后再做，Phase 7 不触碰）：**
 
-- WritingRelation、关系类型系统、Core Fact → 关系图投影、GraphView 数据模型、基础关系图导出
-- CoreBridge 的 `thread` / `knowledge` / `schema_extension` / `retcon` 提交通道
-- WritingEntitySketch 的图谱化（当前 Phase 7 实体草图是平铺视图）
+- ✅ WritingRelation、关系类型系统、Core Fact → 关系图投影、GraphView 数据模型、基础关系图导出
+- ✅ CoreBridge 的 `thread` / `knowledge` / `schema_extension` / `retcon` 提交通道
+- ✅ WritingEntitySketch 的图谱化（GraphNodeView 增加 coreEntityId/summary/tags/attributes）
 
 ## 5. 确认
 

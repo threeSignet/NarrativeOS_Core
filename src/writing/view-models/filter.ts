@@ -42,12 +42,16 @@ const FORBIDDEN_VALUE_PATTERNS: RegExp[] = [
 ];
 
 // 写作层表名裸值——精确白名单，仅真实存在的 writing_* 表名判定为泄漏。
-// 与 writing-store.ts createTables 的 DDL 保持同步（§3.2，共 13 张表）；新增表时须同步本集合。
+// 与 writing-store.ts createTables 的 DDL 保持同步（§3.2）；新增表时须同步本集合。
+// P1 修复（A2）：补全 Phase 8 三张表（writing_relations/associations/relation_hints），
+// 此前遗漏导致 normal 模式下这些表名裸值不被掩码，构成 §9.1 可见性边界缺口。
 const WRITING_TABLE_NAMES: ReadonlySet<string> = new Set([
   'writing_projects', 'writing_author_goals', 'writing_idea_cards', 'writing_blueprints',
   'writing_drafts', 'writing_entity_sketches', 'writing_pending_decisions',
   'writing_proposal_views', 'writing_audit_logs', 'writing_core_refs', 'writing_jobs',
   'writing_workspace_layouts', 'writing_project_preferences',
+  // Phase 8（W.14/W.15/W.16）
+  'writing_relations', 'writing_associations', 'writing_relation_hints',
 ]);
 
 /** 表名匹配时复用的标记正则（供违规 reason 文案引用） */

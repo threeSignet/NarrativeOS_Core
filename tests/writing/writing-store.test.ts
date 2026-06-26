@@ -90,6 +90,39 @@ describe('WritingStore 建表验证', () => {
     expect(found).toBeUndefined(); // 查询自动过滤 deleted_at
   });
 
+  it('软删除作品项目级联清理 Phase 8 三张表（防孤儿行）', () => {
+    // P0-1 回归测试：此前 softDeleteProject 遗漏 writing_relations/associations/relation_hints，
+    // 导致删除项目后这三张表留下孤儿行。验证级联软删后，list 方法（deleted_at IS NULL 过滤）返回空。
+    const project = store.createProject('含关系的作品');
+
+    // 填充三张 Phase 8 表
+    store.createRelationCandidate(project.id, {
+      sourceEntityId: 'ent_a', targetEntityId: 'ent_b',
+      relationTypeId: 'allied_with', layer: 'world', direction: 'directed',
+    });
+    store.createAssociation(project.id, {
+      sourceRef: { objectType: 'entity', objectId: 'ent_a' },
+      targetRef: { objectType: 'entity', objectId: 'ent_b' },
+      label: '师徒',
+    });
+    store.createRelationHint(project.id, {
+      sourceEntityId: 'ent_a', targetEntityId: 'ent_c', summary: '疑似师徒',
+    });
+
+    // 删除前：三张表均有数据
+    expect(store.listRelationCandidates(project.id)).toHaveLength(1);
+    expect(store.listAssociations(project.id)).toHaveLength(1);
+    expect(store.listRelationHints(project.id)).toHaveLength(1);
+
+    // 执行软删除
+    store.softDeleteProject(project.id);
+
+    // 删除后：三张表均被级联软删（list 过滤 deleted_at IS NULL → 返回空）
+    expect(store.listRelationCandidates(project.id)).toHaveLength(0);
+    expect(store.listAssociations(project.id)).toHaveLength(0);
+    expect(store.listRelationHints(project.id)).toHaveLength(0);
+  });
+
   // =============================================================================
   // AuthorGoal CRUD
   // =============================================================================

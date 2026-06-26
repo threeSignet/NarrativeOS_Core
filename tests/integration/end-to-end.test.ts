@@ -189,7 +189,6 @@ describe('Tool + 知识完整流程', () => {
 
     const threads = await toolService.getOpenThreads({ currentChapter:60 });
     expect(threads.threadsMarkdown).toBeDefined();
-    expect(threads.totalOpen).toBeGreaterThanOrEqual(0);
   });
 
   it('知识记忆→封印→恢复', () => {

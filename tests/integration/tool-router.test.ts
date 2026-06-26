@@ -66,20 +66,21 @@ describe('ToolRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('基础功能', () => {
-    it('getDefinitions() 应返回 11 个工具定义（含 detect_entity_hints）', () => {
+    it('getDefinitions() 应返回 13 个工具定义（含 detect_entity_hints + Phase 8 关系工具）', () => {
       const defs = router.getDefinitions();
-      expect(defs).toHaveLength(11);
+      expect(defs).toHaveLength(13);
       const names = defs.map(d => d.name).sort();
       expect(names).toEqual([
         'commit_event', 'commit_retcon', 'commit_schema_extension',
-        'detect_entity_hints', 'get_context_slice', 'get_open_threads',
+        'detect_entity_hints', 'detect_relation_hints',
+        'get_context_slice', 'get_graph_view', 'get_open_threads',
         'propose_event', 'propose_retcon', 'propose_schema_extension',
         'register_entity', 'resolve_thread',
       ]);
     });
 
-    it('toolNames() 应返回 11 个名称', () => {
-      expect(router.toolNames()).toHaveLength(11);
+    it('toolNames() 应返回 13 个名称', () => {
+      expect(router.toolNames()).toHaveLength(13);
     });
 
     it('每个 ToolDefinition 应有 name/description/parameters', () => {
@@ -240,16 +241,6 @@ describe('ToolRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('Tool 6: resolve_thread', () => {
-    beforeEach(() => {
-      // 创建测试事件用于 resolution
-      const evtId = eventStore.create({
-        kind: 'business', type: 'test', chapter: 1, description: '测试',
-        params: {}, context: 'global', timestamp: new Date().toISOString(),
-        factGroupId: 'evt_resolve_test', resolvedThreads: [], dependentFactIds: [],
-      }).id;
-      // 存到 this 的变体中以供后续引用——直接用闭包
-    });
-
     it('应成功关闭一条线索', async () => {
       // 先创建一个待关闭的线程
       const event = eventStore.create({
@@ -440,7 +431,7 @@ describe('ToolRouter', () => {
       expect(commitResult.success).toBe(true);
       if (commitResult.success) {
         const data = commitResult.data as any;
-        expect(data.contestedFactCount).toBeGreaterThanOrEqual(0);
+        expect(typeof data.contestedFactCount).toBe('number');
       }
     });
 

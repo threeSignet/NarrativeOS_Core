@@ -535,16 +535,6 @@ export type RelationDirection = 'directed' | 'bidirectional' | 'undirected' | 'h
 export type RelationCandidateStatus =
   | 'candidate' | 'drafted' | 'submitted' | 'committed' | 'rejected' | 'archived';
 
-/** 关系候选状态机的合法转换 */
-export const RELATION_CANDIDATE_TRANSITIONS: Record<string, string[]> = {
-  candidate: ['drafted', 'submitted', 'rejected', 'archived'],
-  drafted: ['submitted', 'rejected', 'archived', 'candidate'],
-  submitted: ['committed', 'rejected', 'archived', 'drafted'],
-  committed: [],
-  rejected: ['archived'],
-  archived: ['candidate'],
-};
-
 /**
  * 写作对象引用——关联关系可指向非实体对象（章节/草案/伏笔/灵感）
  */
@@ -639,6 +629,14 @@ export interface GraphNodeView {
   sourceLayer: GraphSourceLayer;
   projectTypeLabel: string;
   statusLabel: string;
+  /** Core 实体 ID（ent_xxx），已注册实体才有——供前端导航到实体档案 */
+  coreEntityId?: string;
+  /** 实体描述/摘要（entity sketch.summary） */
+  summary?: string;
+  /** 实体标签（entity sketch.tags） */
+  tags?: string[];
+  /** 从 Core Fact 投影的关键属性（如 realm=筑基期、location=废弃站台） */
+  attributes?: Array<{ predicate: string; value: string }>;
 }
 
 export interface GraphEdgeView {

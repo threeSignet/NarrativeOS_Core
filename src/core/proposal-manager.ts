@@ -535,7 +535,7 @@ export class ProposalManager {
 
     // 校验必填字段
     for (const requiredField of opRules.required) {
-      if (!(requiredField in input) || (input as any)[requiredField] === undefined) {
+      if (!(requiredField in input) || (input as unknown as Record<string, unknown>)[requiredField] === undefined) {
         throw new Error(`op=${input.op} 缺少必填字段: ${requiredField}`);
       }
     }
@@ -1249,7 +1249,7 @@ export class ProposalManager {
       if (!validation.valid) {
         return {
           status: 'rejected',
-          message: `INVALID_TRANSITION：${validation.reason ?? '不允许从 ${thread.status} 转为 ${targetStatus}'}`,
+          message: `INVALID_TRANSITION：${validation.reason ?? '不允许从 ' + thread.status + ' 转为 ' + targetStatus}`,
         };
       }
     }

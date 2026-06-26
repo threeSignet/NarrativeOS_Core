@@ -147,9 +147,10 @@ describeIf('NarrativeAgent — 真实 DeepSeek API 集成测试', () => {
         '韩立突破到筑基期了，帮我记录一下',
       );
       expect(result.content).toBeTruthy();
-      // 提案创建后应该有 pending proposals 或 draft
-      const state = env.agent.getState();
-      expect(state.pendingProposalIds.length + (state.workingDraft ? 1 : 0)).toBeGreaterThanOrEqual(0);
+      // 提案创建后应该有 pending proposals 或 draft。
+      // LLM 行为不确定（可能不调 propose_event），此处只验证流程跑通不崩溃——
+      // result.content 为真即证明 Agent 完成了 ReAct 循环。不再用 pendingProposalIds.length >= 0
+      // 这种永真断言（对非负 length 恒成立，无验证力）。
     }, 60000);
   });
 

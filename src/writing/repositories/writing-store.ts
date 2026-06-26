@@ -1047,6 +1047,11 @@ export class SQLiteWritingStore {
       // W12 §3.1：1:1 容器表，生命周期跟随项目
       'writing_workspace_layouts',
       'writing_project_preferences',
+      // Phase 8（W.14/W.15/W.16）：关系候选/创作关联/检测提示，生命周期跟随项目。
+      // 修复：此前遗漏会导致删除项目后留下孤儿行，破坏数据完整性。
+      'writing_relations',
+      'writing_associations',
+      'writing_relation_hints',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -2093,7 +2098,14 @@ export class SQLiteWritingStore {
     if (parts.length === 0) return;
     parts.push("version = version + 1", "updated_at = datetime('now')");
     vals.push(id, expectedVersion);
-    this.db.prepare(`UPDATE writing_relations SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...vals);
+    // P1 修复（A1）：此前 UPDATE 不检查 changes，版本不匹配时静默成功（0 行更新但无错误），
+    // 导致并发冲突被吞掉。对齐 updateProposalView 范式：检查 changes===0，区分"不存在"与"版本冲突"。
+    const result = this.db.prepare(`UPDATE writing_relations SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...vals);
+    if (result.changes === 0) {
+      const row = this.db.prepare('SELECT version FROM writing_relations WHERE id = ?').get(id) as { version: number } | undefined;
+      if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `关系候选不存在: ${id}`, { objectType: 'relation_candidate', objectId: id });
+      throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `关系候选版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+    }
   }
 
   private rowToRelationCandidate(row: Record<string, unknown>): WritingRelationCandidate {

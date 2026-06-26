@@ -101,13 +101,18 @@ describe('G2 listAuditLogs（store 层 result 过滤）', () => {
     expect(ten).toHaveLength(10);
   });
 
-  it('created_at DESC 排序（最新在前）', async () => {
-    log('first', 'success');
-    // SQLite datetime 精度为秒，强制间隔避免同秒
-    await new Promise((r) => setTimeout(r, 1100));
-    log('second', 'success');
-    await new Promise((r) => setTimeout(r, 1100));
-    log('third', 'success');
+  it('created_at DESC 排序（最新在前）', () => {
+    // 直接用显式时间戳插入，避免依赖 SQLite datetime('now') 秒精度导致同秒记录排序不稳定。
+    // 修复：原实现用 setTimeout 1100ms 强制跨秒，CI 上可能 flaky（高负载时秒边界漂移）。
+    const insertAt = (action: string, createdAt: string) => {
+      db.prepare(
+        `INSERT INTO writing_audit_logs (id, project_id, action, target_type, target_id, trigger_source, result, detail_json, source_refs_json, created_at)
+         VALUES (?, ?, ?, 'draft', ?, 'author_action', 'success', '{}', '[]', ?)`
+      ).run(`wal_${action}`, projectId, action, `t_${action}`, createdAt);
+    };
+    insertAt('first', '2026-06-25 10:00:00');
+    insertAt('second', '2026-06-25 10:00:01');
+    insertAt('third', '2026-06-25 10:00:02');
 
     const all = store.listAuditLogs(projectId);
     expect(all[0]!.action).toBe('third');

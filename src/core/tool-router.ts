@@ -16,7 +16,7 @@
 import { ProposalManager } from './proposal-manager.js';
 import { RetconEngine } from './retcon-engine.js';
 import { ToolService } from './tool-service.js';
-import { SchemaExtensionManager } from './schema-extension-manager.js';
+import { SchemaExtensionManager, type PredicateExtension, type RuleExtension } from './schema-extension-manager.js';
 import type {
   FactStore,
   KnowledgeStore,
@@ -296,6 +296,54 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         required: ['proposal_id'],
       },
     },
+
+    // Tool 12: detect_relation_hints（Phase 8：关系检测）
+    detect_relation_hints: {
+      name: 'detect_relation_hints',
+      description: '从对话中检测实体间关系，创建关系提示供作者审核。每个提示需提供源实体ID、目标实体ID、关系类型和摘要描述。这是发现隐含关系的第一步——检测后系统生成提示，作者确认后才成为正式关系候选。',
+      parameters: {
+        type: 'object',
+        properties: {
+          hints: {
+            type: 'array',
+            description: '检测到的关系提示列表（至少 1 个）',
+            items: {
+              type: 'object',
+              properties: {
+                source_entity_id: { type: 'string', description: '源实体 ID（如 ent_zhangsan）' },
+                target_entity_id: { type: 'string', description: '目标实体 ID（如 ent_lisi）' },
+                relation_type_id: { type: 'string', description: '关系类型（如 enemy_of、disciple_of）' },
+                summary: { type: 'string', description: '关系描述（如"张三与李四是敌人"）' },
+              },
+              required: ['source_entity_id', 'target_entity_id', 'summary'],
+            },
+            minItems: 1,
+          },
+        },
+        required: ['hints'],
+      },
+    },
+
+    // Tool 13: get_graph_view（Phase 8：图谱查询）
+    get_graph_view: {
+      name: 'get_graph_view',
+      description: '查询当前项目实体关系图谱。返回节点（实体）和边（关系）的完整网络视图，用于了解"谁和谁有关系、关系类型是什么"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['world', 'relationship'],
+            description: '视图模式：world=全部实体+关系，relationship=仅角色+关系（默认 world）',
+          },
+          entity_filter: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '按实体类型过滤（如 ["角色"]），不传则返回全部',
+          },
+        },
+      },
+    },
   };
 }
 
@@ -324,11 +372,24 @@ export class ToolRouter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private entityService: { detectEntityHints: (ctx: any, hints: Array<{ displayName: string; typeLabel: string; excerpt?: string }>) => any } | undefined;
   private writingProjectId: string | undefined;
+  // Phase 8：关系服务与图谱服务（可选注入，未注入时工具返回 INTERNAL_ERROR）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private relationService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private graphService: any | undefined;
 
   /** 延迟注入写作层实体检测服务（chat.ts 在 entityService 创建后调用） */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setEntityService(svc: { detectEntityHints: (ctx: any, hints: Array<{ displayName: string; typeLabel: string; excerpt?: string }>) => any }, writingProjectId: string): void {
     this.entityService = svc;
+    this.writingProjectId = writingProjectId;
+  }
+
+  /** 延迟注入写作层关系/图谱服务（chat.ts 在 relationService/graphService 创建后调用） */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setGraphServices(relationService: any, graphService: any, writingProjectId: string): void {
+    this.relationService = relationService;
+    this.graphService = graphService;
     this.writingProjectId = writingProjectId;
   }
   // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
@@ -383,6 +444,8 @@ export class ToolRouter {
         case 'register_entity':         return await this.handleRegisterEntity(params);
         case 'propose_schema_extension': return await this.handleProposeSchemaExtension(params);
         case 'commit_schema_extension': return await this.handleCommitSchemaExtension(params);
+        case 'detect_relation_hints':  return await this.handleDetectRelationHints(params);
+        case 'get_graph_view':         return await this.handleGetGraphView(params);
         default:
           return this.error(ToolErrorCode.UNKNOWN_TOOL, `未知工具: ${toolName}`, false, `可用工具: ${this.toolNames().join(', ')}`);
       }
@@ -428,6 +491,7 @@ export class ToolRouter {
       'propose_retcon', 'commit_retcon', 'resolve_thread',
       'get_open_threads', 'register_entity',
       'propose_schema_extension', 'commit_schema_extension',
+      'detect_relation_hints', 'get_graph_view',
     ];
   }
 
@@ -490,16 +554,8 @@ export class ToolRouter {
       });
     }
 
-    // 构造完整 ctx（detectEntityHints 用到 projectId/sourceRefs/requestId/authorId/trigger 等）。
     // Core 层不依赖写作层 makeRequestContext，内联构造等价对象。
-    const ctx = {
-      projectId: this.writingProjectId,
-      requestId: `tool_detect_${Date.now()}`,
-      authorId: this.writingProjectId ?? 'default',
-      sessionId: `tool_session`,
-      trigger: 'agent_suggestion',
-      sourceRefs: [],
-    } as unknown as Parameters<typeof this.entityService.detectEntityHints>[0];
+    const ctx = this.makeToolContext('detect');
 
     const sketches = this.entityService.detectEntityHints(ctx, hints);
 
@@ -745,7 +801,26 @@ export class ToolRouter {
       ? params['new_predicates'] as Array<Record<string, unknown>>
       : [];
     for (const pred of newPredicates) {
-      const p = this.schemaExtensionManager.proposePredicate(pred as any);
+      // 校验谓词必需字段
+      if (typeof pred.name !== 'string' || !pred.name) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_predicates[].name 必须是非空字符串', false);
+      }
+      if (typeof pred.displayName !== 'string' || !pred.displayName) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_predicates[].displayName 必须是非空字符串', false);
+      }
+      if (typeof pred.valueType !== 'string' || !['scalar', 'entity_ref', 'enum'].includes(pred.valueType as string)) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_predicates[].valueType 必须是 scalar/entity_ref/enum 之一', false);
+      }
+      const predicateExt: PredicateExtension = {
+        name: pred.name as string,
+        displayName: pred.displayName as string,
+        valueType: pred.valueType as PredicateExtension['valueType'],
+        enumValues: Array.isArray(pred.enumValues) ? pred.enumValues as string[] : undefined,
+        sequenceOrder: Array.isArray(pred.sequenceOrder) ? pred.sequenceOrder as string[] : undefined,
+        description: typeof pred.description === 'string' ? pred.description : undefined,
+        relationKind: typeof pred.relationKind === 'string' ? pred.relationKind : undefined,
+      };
+      const p = this.schemaExtensionManager.proposePredicate(predicateExt);
       proposals.push({
         proposal_id: p.proposalId,
         extension_type: p.extensionType,
@@ -759,7 +834,43 @@ export class ToolRouter {
       ? params['new_rules'] as Array<Record<string, unknown>>
       : [];
     for (const rule of newRules) {
-      const r = this.schemaExtensionManager.proposeRule(rule as any);
+      // 校验规则必需字段
+      if (typeof rule.id !== 'string' || !rule.id) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_rules[].id 必须是非空字符串', false);
+      }
+      if (typeof rule.type !== 'string' || !rule.type) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_rules[].type 必须是非空字符串', false);
+      }
+      if (typeof rule.name !== 'string' || !rule.name) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_rules[].name 必须是非空字符串', false);
+      }
+      const def = rule.definition as Record<string, unknown> | undefined;
+      if (!def || typeof def !== 'object') {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_rules[].definition 必须是对象', false);
+      }
+      if (typeof def.type !== 'string' || !def.type) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_rules[].definition.type 必须是非空字符串', false);
+      }
+      if (!Array.isArray(def.conditions)) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'new_rules[].definition.conditions 必须是数组', false);
+      }
+      const ruleExt: RuleExtension = {
+        id: rule.id as string,
+        type: rule.type as string,
+        name: rule.name as string,
+        description: typeof rule.description === 'string' ? rule.description : undefined,
+        priority: typeof rule.priority === 'number' ? rule.priority : undefined,
+        definition: {
+          id: (def['id'] as string) ?? (rule.id as string),
+          type: def.type as string,
+          name: (def['name'] as string) ?? (rule.name as string),
+          description: typeof def['description'] === 'string' ? def['description'] as string : undefined,
+          priority: typeof def['priority'] === 'number' ? def['priority'] as number : undefined,
+          conditions: def.conditions as unknown[],
+          consequences: Array.isArray(def['consequences']) ? def['consequences'] as unknown[] : undefined,
+        },
+      };
+      const r = this.schemaExtensionManager.proposeRule(ruleExt);
       proposals.push({
         proposal_id: r.proposalId,
         extension_type: r.extensionType,
@@ -796,6 +907,156 @@ export class ToolRouter {
   }
 
   // =========================================================================
+  // Tool 12: detect_relation_hints（Phase 8：关系检测）
+  // =========================================================================
+
+  private async handleDetectRelationHints(params: Record<string, unknown>) {
+    if (!this.relationService || !this.writingProjectId) {
+      return this.error(
+        ToolErrorCode.INTERNAL_ERROR,
+        '关系检测服务未配置（写作层未注入）',
+        false,
+        '此工具仅在写作层 CLI 环境可用。',
+      );
+    }
+
+    const rawHints = params['hints'];
+    if (!Array.isArray(rawHints) || rawHints.length === 0) {
+      return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'hints 必须是非空数组', false, '请提供至少一个关系提示。');
+    }
+
+    // 校验并映射参数
+    const hints: Array<{
+      sourceEntityId: string;
+      targetEntityId: string;
+      relationTypeId?: string;
+      summary: string;
+    }> = [];
+
+    for (let i = 0; i < rawHints.length; i++) {
+      const h = rawHints[i] as Record<string, unknown>;
+      const sourceEntityId = h['source_entity_id'];
+      const targetEntityId = h['target_entity_id'];
+      const summary = h['summary'];
+
+      if (typeof sourceEntityId !== 'string' || sourceEntityId.trim().length === 0) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, `hints[${i}].source_entity_id 必须是非空字符串`, false);
+      }
+      if (typeof targetEntityId !== 'string' || targetEntityId.trim().length === 0) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, `hints[${i}].target_entity_id 必须是非空字符串`, false);
+      }
+      if (typeof summary !== 'string' || summary.trim().length === 0) {
+        return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, `hints[${i}].summary 必须是非空字符串`, false);
+      }
+
+      hints.push({
+        sourceEntityId: sourceEntityId.trim(),
+        targetEntityId: targetEntityId.trim(),
+        relationTypeId: typeof h['relation_type_id'] === 'string' ? h['relation_type_id'] : undefined,
+        summary: summary.trim(),
+      });
+    }
+
+    // 构造 ctx
+    const ctx = this.makeToolContext('relation');
+
+    const created = this.relationService.createRelationHints(ctx, hints);
+
+    return this.ok({
+      detected: created.length,
+      hints: (created as Array<{ id: string; sourceEntityId: string; targetEntityId: string; summary: string }>).map(h => ({
+        id: h.id,
+        source: h.sourceEntityId,
+        target: h.targetEntityId,
+        summary: h.summary,
+      })),
+      message: `已创建 ${created.length} 个关系提示。用 /relation 查看，确认后成为正式关系候选。`,
+    });
+  }
+
+  // =========================================================================
+  // Tool 13: get_graph_view（Phase 8：图谱查询）
+  // =========================================================================
+
+  private async handleGetGraphView(params: Record<string, unknown>) {
+    if (!this.graphService || !this.writingProjectId) {
+      return this.error(
+        ToolErrorCode.INTERNAL_ERROR,
+        '图谱服务未配置（写作层未注入）',
+        false,
+        '此工具仅在写作层 CLI 环境可用。',
+      );
+    }
+
+    const mode = typeof params['mode'] === 'string' && params['mode'] === 'relationship'
+      ? 'relationship' as const
+      : 'world' as const;
+
+    const entityFilter = Array.isArray(params['entity_filter'])
+      ? (params['entity_filter'] as string[])
+      : undefined;
+
+    const ctx = {
+      projectId: this.writingProjectId,
+      requestId: `tool_graph_${Date.now()}`,
+      authorId: this.writingProjectId,
+      sessionId: `tool_session`,
+      trigger: 'agent_query',
+      sourceRefs: [],
+      visibilityMode: 'normal' as const,
+    };
+
+    const graph = await this.graphService.buildGraphView(ctx, mode, entityFilter ? { entityTypes: entityFilter } : undefined);
+
+    // 渲染为 Agent 可读的文本摘要
+    const nodes = graph.nodes as Array<{ id: string; label: string; projectTypeLabel: string; statusLabel: string; attributes?: Array<{ predicate: string; value: string }> }>;
+    const edges = graph.edges as Array<{ sourceNodeId: string; targetNodeId: string; label: string }>;
+    const nodeCount = nodes.length;
+    const edgeCount = edges.length;
+    const lines: string[] = [`## 实体关系图谱（${mode}模式）`];
+    lines.push(`共 ${nodeCount} 个实体，${edgeCount} 条关系\n`);
+
+    if (nodeCount === 0) {
+      lines.push('暂无实体数据。');
+    } else {
+      // 按类型分组显示节点
+      const byType = new Map<string, typeof nodes>();
+      for (const n of nodes) {
+        const key = n.projectTypeLabel;
+        const arr = byType.get(key) ?? [];
+        arr.push(n);
+        byType.set(key, arr);
+      }
+      for (const [type, typeNodes] of byType) {
+        lines.push(`### ${type}（${typeNodes.length}）`);
+        for (const n of typeNodes) {
+          const attrs = n.attributes?.length
+            ? ' — ' + n.attributes.map((a: { predicate: string; value: string }) => `${a.predicate}=${a.value}`).join(', ')
+            : '';
+          lines.push(`- ${n.label} [${n.statusLabel}]${attrs}`);
+        }
+        lines.push('');
+      }
+
+      if (edgeCount > 0) {
+        lines.push('### 关系');
+        for (const e of edges) {
+          const src = nodes.find((n: { id: string }) => n.id === e.sourceNodeId)?.label ?? e.sourceNodeId;
+          const tgt = nodes.find((n: { id: string }) => n.id === e.targetNodeId)?.label ?? e.targetNodeId;
+          lines.push(`- ${src} →[${e.label}]→ ${tgt}`);
+        }
+      }
+    }
+
+    return this.ok({
+      nodeCount,
+      edgeCount,
+      mode,
+      markdown: lines.join('\n'),
+    });
+  }
+
+  // =========================================================================
   // 辅助方法
   // =========================================================================
 
@@ -823,6 +1084,19 @@ export class ToolRouter {
       default:
         return false;
     }
+  }
+
+  /** 构造 Core 层 WritingRequestContext（detectEntityHints / detectRelationHints 共用） */
+  private makeToolContext(requestPrefix: string) {
+    return {
+      projectId: this.writingProjectId,
+      requestId: `tool_${requestPrefix}_${Date.now()}`,
+      authorId: this.writingProjectId ?? 'default',
+      sessionId: `tool_session`,
+      trigger: 'agent_suggestion' as const,
+      sourceRefs: [],
+      visibilityMode: 'normal' as const,
+    };
   }
 }
 
@@ -870,8 +1144,9 @@ function parseFactChanges(params: Record<string, unknown>): FactChangeInput[] {
       const parsed = JSON.parse(legacy);
       if (!Array.isArray(parsed)) throw new Error('changes 必须解析为数组');
       return parsed as FactChangeInput[];
-    } catch {
-      throw new Error(`SCHEMA_VALIDATION_FAILED: changes 解析失败，请优先传入 fact_changes 数组。收到: ${legacy.slice(0, 100)}`);
+    } catch (parseErr) {
+      const reason = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      throw new Error(`SCHEMA_VALIDATION_FAILED: changes 解析失败（${reason}），请优先传入 fact_changes 数组。收到: ${legacy.slice(0, 100)}`);
     }
   }
 

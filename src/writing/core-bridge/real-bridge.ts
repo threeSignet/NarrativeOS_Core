@@ -717,6 +717,438 @@ export class RealCoreBridge implements CoreBridgeService {
   }
 
   // =========================================================================
+  // Phase 8：额外提交通道
+  // =========================================================================
+
+  async commitReviewedThreadChange(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult> {
+    const failWith = (error: CoreErrorExplanation): CommitResult => {
+      this.recordAudit(ctx, {
+        action: 'commit_thread_change',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: error.errorCode,
+      });
+      return { success: false, error };
+    };
+
+    if (!this.writingStore) {
+      return failWith(this.explanation('COREBRIDGE_CONFIG_ERROR', {
+        humanMessage: 'CoreBridge 未配置 WritingStore',
+        suggestedActions: ['请确保 CLI 确认通道正确初始化 CoreBridge'],
+        isRecoverable: false,
+      }));
+    }
+
+    const pv = this.writingStore.getProposalView(proposalViewId);
+    if (!pv) {
+      return failWith(this.explanation(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, {
+        humanMessage: `找不到审核视图: ${proposalViewId}`,
+        isRecoverable: false,
+      }));
+    }
+    if (pv.status !== 'author_approved') {
+      return failWith(this.explanation(WritingErrorCode.PROPOSAL_NOT_IN_REVIEW, {
+        humanMessage: `审核视图状态不满足提交条件（当前: ${pv.status}）`,
+        isRecoverable: false,
+      }));
+    }
+
+    // 从 simulationInputs 提取线索变更参数
+    const inputs = pv.simulationInputs;
+    if (!inputs) {
+      return failWith(this.explanation(WritingErrorCode.WRITING_STORE_ERROR, {
+        humanMessage: '审核视图缺少推演输入（无 simulationInputs）',
+        isRecoverable: false,
+      }));
+    }
+
+    const wrapper = await this.toolRouter.execute('resolve_thread', {
+      thread_id: (inputs as unknown as Record<string, unknown>)['threadId'] ?? (inputs as unknown as Record<string, unknown>)['thread_id'],
+      resolution_event_id: (inputs as unknown as Record<string, unknown>)['resolutionEventId'] ?? (inputs as unknown as Record<string, unknown>)['resolution_event_id'],
+      chapter: inputs.chapter,
+      explanation: inputs.eventDescription,
+    }) as ToolResultWrapper<Record<string, unknown>>;
+
+    if (!wrapper.success) {
+      const failureExplanation = this.explainCoreFailure(wrapper as ToolResultErr);
+      try {
+        this.writingStore.updateProposalView(proposalViewId, {
+          status: 'commit_failed',
+          commitError: failureExplanation,
+        });
+      } catch { /* 状态标记失败不阻断审计 */ }
+      this.recordAudit(ctx, {
+        action: 'commit_thread_change',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: failureExplanation.errorCode,
+      });
+      return { success: false, error: failureExplanation };
+    }
+
+    // P1 修复（A3）：对齐 commitReviewedProposal 范式——审计补 sourceRefs + partial 处理。
+    // resolve_thread 关闭线索，不产生持久 Core event 对象，故不强建 WritingCoreRef。
+    const commitSourceRefs: SourceRef[] = [{ kind: 'proposal', id: proposalViewId }];
+    let writebackError: string | undefined;
+    try {
+      this.writingStore.updateProposalView(proposalViewId, {
+        status: 'committed',
+        authorDecision: '确认提交',
+      });
+    } catch (wbErr) {
+      writebackError = wbErr instanceof Error ? wbErr.message : String(wbErr);
+    }
+
+    const isPartial = writebackError !== undefined;
+    this.recordAudit(ctx, {
+      action: 'commit_thread_change',
+      targetType: 'proposal_view',
+      targetId: proposalViewId,
+      result: isPartial ? 'partial' : 'success',
+      detail: isPartial ? { writebackError } : undefined,
+      sourceRefs: commitSourceRefs,
+    });
+
+    return { success: true };
+  }
+
+  async commitReviewedKnowledgeChange(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult> {
+    const failWith = (error: CoreErrorExplanation): CommitResult => {
+      this.recordAudit(ctx, {
+        action: 'commit_knowledge_change',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: error.errorCode,
+      });
+      return { success: false, error };
+    };
+
+    if (!this.writingStore) {
+      return failWith(this.explanation('COREBRIDGE_CONFIG_ERROR', {
+        humanMessage: 'CoreBridge 未配置 WritingStore',
+        suggestedActions: ['请确保 CLI 确认通道正确初始化 CoreBridge'],
+        isRecoverable: false,
+      }));
+    }
+
+    const pv = this.writingStore.getProposalView(proposalViewId);
+    if (!pv) {
+      return failWith(this.explanation(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, {
+        humanMessage: `找不到审核视图: ${proposalViewId}`,
+        isRecoverable: false,
+      }));
+    }
+    if (pv.status !== 'author_approved') {
+      return failWith(this.explanation(WritingErrorCode.PROPOSAL_NOT_IN_REVIEW, {
+        humanMessage: `审核视图状态不满足提交条件（当前: ${pv.status}）`,
+        isRecoverable: false,
+      }));
+    }
+
+    // 知识变更通过 propose_event + commit_event 提交
+    // simulationInputs 包含 eventDescription/eventType/chapter/factChanges
+    const inputs = pv.simulationInputs;
+    if (!inputs) {
+      return failWith(this.explanation(WritingErrorCode.WRITING_STORE_ERROR, {
+        humanMessage: '审核视图缺少推演输入（无 simulationInputs）',
+        isRecoverable: false,
+      }));
+    }
+
+    // 先 propose
+    const proposeWrapper = await this.toolRouter.execute('propose_event', {
+      event_type: inputs.eventType,
+      event_description: inputs.eventDescription,
+      chapter: inputs.chapter,
+      fact_changes: inputs.factChanges,
+    }) as ToolResultWrapper<Record<string, unknown>>;
+
+    if (!proposeWrapper.success) {
+      const failureExplanation = this.explainCoreFailure(proposeWrapper as ToolResultErr);
+      try {
+        this.writingStore.updateProposalView(proposalViewId, {
+          status: 'commit_failed',
+          commitError: failureExplanation,
+        });
+      } catch { /* */ }
+      this.recordAudit(ctx, {
+        action: 'commit_knowledge_change',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: failureExplanation.errorCode,
+      });
+      return { success: false, error: failureExplanation };
+    }
+
+    // 再 commit
+    const coreProposalId = (proposeWrapper.data as { proposalId: string }).proposalId;
+    const commitWrapper = await this.toolRouter.execute('commit_event', {
+      proposal_id: coreProposalId,
+    }) as ToolResultWrapper<Record<string, unknown>>;
+
+    if (!commitWrapper.success) {
+      const failureExplanation = this.explainCoreFailure(commitWrapper as ToolResultErr);
+      try {
+        this.writingStore.updateProposalView(proposalViewId, {
+          status: 'commit_failed',
+          commitError: failureExplanation,
+        });
+      } catch { /* */ }
+      this.recordAudit(ctx, {
+        action: 'commit_knowledge_change',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: failureExplanation.errorCode,
+      });
+      return { success: false, error: failureExplanation };
+    }
+
+    // P1 修复（A3）：对齐 commitReviewedProposal 范式——
+    //   1. 审计补 sourceRefs（追溯到此 PV 的审核）
+    //   2. 创建 WritingCoreRef（写作 PV ↔ Core event 双向索引，供 Retcon 影响分析）
+    //   3. 回写/建索引失败记 partial 审计（Core 已提交不可逆，由 reconcileCommittedProposals 对账恢复）
+    const coreEventId = (commitWrapper.data as { event_id: string }).event_id;
+    const commitSourceRefs: SourceRef[] = [{ kind: 'proposal', id: proposalViewId }];
+    let writebackError: string | undefined;
+    try {
+      this.writingStore.updateProposalView(proposalViewId, {
+        status: 'committed',
+        coreEventId,
+        authorDecision: '确认提交',
+      });
+      this.writingStore.createCoreRef(pv.projectId, {
+        writingObjectType: 'proposal_view',
+        writingObjectId: proposalViewId,
+        coreObjectType: 'event',
+        coreObjectId: coreEventId,
+      });
+    } catch (wbErr) {
+      writebackError = wbErr instanceof Error ? wbErr.message : String(wbErr);
+    }
+
+    const isPartial = writebackError !== undefined;
+    this.recordAudit(ctx, {
+      action: 'commit_knowledge_change',
+      targetType: 'proposal_view',
+      targetId: proposalViewId,
+      result: isPartial ? 'partial' : 'success',
+      detail: isPartial ? { coreEventId, writebackError } : { coreEventId },
+      sourceRefs: commitSourceRefs,
+    });
+
+    return { success: true, coreEventId };
+  }
+
+  async commitReviewedWorldPackageChange(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult> {
+    const failWith = (error: CoreErrorExplanation): CommitResult => {
+      this.recordAudit(ctx, {
+        action: 'commit_schema_extension',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: error.errorCode,
+      });
+      return { success: false, error };
+    };
+
+    if (!this.writingStore) {
+      return failWith(this.explanation('COREBRIDGE_CONFIG_ERROR', {
+        humanMessage: 'CoreBridge 未配置 WritingStore',
+        suggestedActions: ['请确保 CLI 确认通道正确初始化 CoreBridge'],
+        isRecoverable: false,
+      }));
+    }
+
+    const pv = this.writingStore.getProposalView(proposalViewId);
+    if (!pv) {
+      return failWith(this.explanation(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, {
+        humanMessage: `找不到审核视图: ${proposalViewId}`,
+        isRecoverable: false,
+      }));
+    }
+    if (pv.status !== 'author_approved') {
+      return failWith(this.explanation(WritingErrorCode.PROPOSAL_NOT_IN_REVIEW, {
+        humanMessage: `审核视图状态不满足提交条件（当前: ${pv.status}）`,
+        isRecoverable: false,
+      }));
+    }
+
+    if (!pv.coreProposalId) {
+      return failWith(this.explanation(WritingErrorCode.PROPOSAL_NOT_IN_REVIEW, {
+        humanMessage: '审核视图没有关联的 Core Schema 提案',
+        isRecoverable: false,
+      }));
+    }
+
+    const wrapper = await this.toolRouter.execute('commit_schema_extension', {
+      proposal_id: pv.coreProposalId,
+    }) as ToolResultWrapper<Record<string, unknown>>;
+
+    if (!wrapper.success) {
+      const failureExplanation = this.explainCoreFailure(wrapper as ToolResultErr);
+      try {
+        this.writingStore.updateProposalView(proposalViewId, {
+          status: 'commit_failed',
+          commitError: failureExplanation,
+        });
+      } catch { /* */ }
+      this.recordAudit(ctx, {
+        action: 'commit_schema_extension',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: failureExplanation.errorCode,
+      });
+      return { success: false, error: failureExplanation };
+    }
+
+    // P1 修复（A3）：对齐 commitReviewedProposal 范式——审计补 sourceRefs。
+    // WorldPackage（schema 扩展）不产生持久 Core event 对象（schema proposal 是内存态），
+    // 故不强建 WritingCoreRef（避免指向易失对象的误导性引用）；仅补审计追溯。
+    const commitSourceRefs: SourceRef[] = [{ kind: 'proposal', id: proposalViewId }];
+    let writebackError: string | undefined;
+    try {
+      this.writingStore.updateProposalView(proposalViewId, {
+        status: 'committed',
+        authorDecision: '确认提交',
+      });
+    } catch (wbErr) {
+      writebackError = wbErr instanceof Error ? wbErr.message : String(wbErr);
+    }
+
+    const isPartial = writebackError !== undefined;
+    this.recordAudit(ctx, {
+      action: 'commit_schema_extension',
+      targetType: 'proposal_view',
+      targetId: proposalViewId,
+      result: isPartial ? 'partial' : 'success',
+      detail: isPartial
+        ? { coreProposalId: pv.coreProposalId, writebackError }
+        : { coreProposalId: pv.coreProposalId },
+      sourceRefs: commitSourceRefs,
+    });
+
+    return { success: true };
+  }
+
+  async commitReviewedRetcon(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<CommitResult> {
+    const failWith = (error: CoreErrorExplanation): CommitResult => {
+      this.recordAudit(ctx, {
+        action: 'commit_retcon',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: error.errorCode,
+      });
+      return { success: false, error };
+    };
+
+    if (!this.writingStore) {
+      return failWith(this.explanation('COREBRIDGE_CONFIG_ERROR', {
+        humanMessage: 'CoreBridge 未配置 WritingStore',
+        suggestedActions: ['请确保 CLI 确认通道正确初始化 CoreBridge'],
+        isRecoverable: false,
+      }));
+    }
+
+    const pv = this.writingStore.getProposalView(proposalViewId);
+    if (!pv) {
+      return failWith(this.explanation(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, {
+        humanMessage: `找不到审核视图: ${proposalViewId}`,
+        isRecoverable: false,
+      }));
+    }
+    if (pv.status !== 'author_approved') {
+      return failWith(this.explanation(WritingErrorCode.PROPOSAL_NOT_IN_REVIEW, {
+        humanMessage: `审核视图状态不满足提交条件（当前: ${pv.status}）`,
+        isRecoverable: false,
+      }));
+    }
+
+    if (!pv.coreProposalId) {
+      return failWith(this.explanation(WritingErrorCode.PROPOSAL_NOT_IN_REVIEW, {
+        humanMessage: '审核视图没有关联的 Core Retcon 提案',
+        isRecoverable: false,
+      }));
+    }
+
+    const wrapper = await this.toolRouter.execute('commit_retcon', {
+      retcon_proposal_id: pv.coreProposalId,
+    }) as ToolResultWrapper<Record<string, unknown>>;
+
+    if (!wrapper.success) {
+      const failureExplanation = this.explainCoreFailure(wrapper as ToolResultErr);
+      try {
+        this.writingStore.updateProposalView(proposalViewId, {
+          status: 'commit_failed',
+          commitError: failureExplanation,
+        });
+      } catch { /* */ }
+      this.recordAudit(ctx, {
+        action: 'commit_retcon',
+        targetType: 'proposal_view',
+        targetId: proposalViewId,
+        result: 'failure',
+        errorCode: failureExplanation.errorCode,
+      });
+      return { success: false, error: failureExplanation };
+    }
+
+    // P1 修复（A3）：对齐 commitReviewedProposal 范式（见 commitReviewedKnowledgeChange 同款注释）。
+    // commit_retcon 返回 retconEventId（retcon-engine.ts 生成的 evt_retcon_xxx），作为 Core event 索引。
+    const retconEventId = (wrapper.data as { retconEventId?: string }).retconEventId;
+    const commitSourceRefs: SourceRef[] = [{ kind: 'proposal', id: proposalViewId }];
+    let writebackError: string | undefined;
+    try {
+      this.writingStore.updateProposalView(proposalViewId, {
+        status: 'committed',
+        authorDecision: '确认提交',
+      });
+      if (retconEventId) {
+        this.writingStore.createCoreRef(pv.projectId, {
+          writingObjectType: 'proposal_view',
+          writingObjectId: proposalViewId,
+          coreObjectType: 'event',
+          coreObjectId: retconEventId,
+        });
+      }
+    } catch (wbErr) {
+      writebackError = wbErr instanceof Error ? wbErr.message : String(wbErr);
+    }
+
+    const isPartial = writebackError !== undefined;
+    this.recordAudit(ctx, {
+      action: 'commit_retcon',
+      targetType: 'proposal_view',
+      targetId: proposalViewId,
+      result: isPartial ? 'partial' : 'success',
+      detail: isPartial
+        ? { retconEventId, writebackError }
+        : { retconEventId },
+      sourceRefs: commitSourceRefs,
+    });
+
+    return { success: true, coreEventId: retconEventId };
+  }
+
+  // =========================================================================
   // 对账恢复（§7.11.5 两阶段提交恢复机制——初始化时调用）
   // =========================================================================
 

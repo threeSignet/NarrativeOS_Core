@@ -242,7 +242,7 @@ describe('§5A-1：ContextAnalyzer 信号正确性', () => {
     expect(signals.primaryEntities).toContain('ent_hanli');
 
     // 次要实体应从文本中的 ent_ 引用提取
-    expect(signals.secondaryEntities.length).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(signals.secondaryEntities)).toBe(true);
 
     // 时间焦点应正确
     expect(signals.temporalFocus).toBe(5);

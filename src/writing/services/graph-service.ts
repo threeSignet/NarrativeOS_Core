@@ -58,8 +58,11 @@ export class GraphService {
     // ---- 1. 从实体草图构建节点 ----
     const sketches = this.store.listEntitySketches(projectId) as Array<{
       id: string; displayName: string; typeLabel: string; status: string;
-      coreEntityId?: string;
+      coreEntityId?: string; summary?: string; tags?: string[];
     }>;
+
+    // 预取 Core 实体关键属性（realm/location/weapon 等），供节点 attributes 字段
+    const entityAttributes = this.loadEntityAttributes(projectId, sketches);
 
     for (const s of sketches) {
       const sourceLayer: GraphSourceLayer =
@@ -84,6 +87,10 @@ export class GraphService {
         sourceLayer,
         projectTypeLabel: s.typeLabel,
         statusLabel,
+        coreEntityId: s.coreEntityId,
+        summary: s.summary ?? undefined,
+        tags: s.tags && s.tags.length > 0 ? s.tags : undefined,
+        attributes: entityAttributes.get(s.id),
       });
     }
 
@@ -118,8 +125,8 @@ export class GraphService {
         if (sourceSketchId === targetSketchId) continue;
 
         // 确保节点存在
-        this.ensureNode(nodeMap, sourceSketchId, sketches);
-        this.ensureNode(nodeMap, targetSketchId, sketches);
+        this.ensureNode(nodeMap, sourceSketchId, sketches, entityAttributes);
+        this.ensureNode(nodeMap, targetSketchId, sketches, entityAttributes);
 
         edges.push({
           id: `core_${f.subject}_${f.predicate}_${f.value_entity_ref}`,
@@ -147,8 +154,8 @@ export class GraphService {
         'candidate';
 
       // 确保两端节点存在
-      this.ensureNode(nodeMap, c.sourceEntityId, sketches);
-      this.ensureNode(nodeMap, c.targetEntityId, sketches);
+      this.ensureNode(nodeMap, c.sourceEntityId, sketches, entityAttributes);
+      this.ensureNode(nodeMap, c.targetEntityId, sketches, entityAttributes);
 
       edges.push({
         id: c.id,
@@ -167,8 +174,8 @@ export class GraphService {
       if (a.status === 'archived') continue;
 
       // 确保两端节点存在（关联可指向非实体对象，但当前只处理实体→实体）
-      const sourceId = a.sourceRef.objectType === 'entity' ? a.sourceRef.objectId : a.sourceRef.objectId;
-      const targetId = a.targetRef.objectType === 'entity' ? a.targetRef.objectId : a.targetRef.objectId;
+      const sourceId = a.sourceRef.objectId;
+      const targetId = a.targetRef.objectId;
 
       edges.push({
         id: a.id,
@@ -184,8 +191,8 @@ export class GraphService {
     // ---- 5. 从检测提示构建边 ----
     const hints = this.store.listRelationHints(projectId, { status: 'new' });
     for (const h of hints) {
-      this.ensureNode(nodeMap, h.sourceEntityId, sketches);
-      this.ensureNode(nodeMap, h.targetEntityId, sketches);
+      this.ensureNode(nodeMap, h.sourceEntityId, sketches, entityAttributes);
+      this.ensureNode(nodeMap, h.targetEntityId, sketches, entityAttributes);
 
       edges.push({
         id: h.id,
@@ -271,7 +278,8 @@ export class GraphService {
   private ensureNode(
     nodeMap: Map<string, GraphNodeView>,
     entityId: string,
-    sketches: Array<{ id: string; displayName: string; typeLabel: string; status: string; coreEntityId?: string }>,
+    sketches: Array<{ id: string; displayName: string; typeLabel: string; status: string; coreEntityId?: string; summary?: string; tags?: string[] }>,
+    attributes?: Map<string, Array<{ predicate: string; value: string }>>,
   ): void {
     if (nodeMap.has(entityId)) return;
     const sketch = sketches.find(s => s.id === entityId);
@@ -287,7 +295,74 @@ export class GraphService {
       sourceLayer,
       projectTypeLabel: sketch.typeLabel,
       statusLabel: sketch.status,
+      coreEntityId: sketch.coreEntityId,
+      summary: sketch.summary ?? undefined,
+      tags: sketch.tags && sketch.tags.length > 0 ? sketch.tags : undefined,
+      attributes: attributes?.get(entityId),
     });
+  }
+
+  /**
+   * 从 Core facts 表加载每个已注册实体的关键属性（scalar 类型的 Fact）。
+   * 返回 sketchId → attributes 映射。
+   *
+   * 只取常见展示属性（realm/location/weapon/technique/status/mentor），不全量投影。
+   * 已废弃/merged 的实体不加载属性（图谱中降级为纯标签节点）。
+   */
+  private loadEntityAttributes(
+    projectId: string,
+    sketches: Array<{ id: string; coreEntityId?: string; status: string }>,
+  ): Map<string, Array<{ predicate: string; value: string }>> {
+    const result = new Map<string, Array<{ predicate: string; value: string }>>();
+    const DISPLAY_PREDICATES = new Set([
+      'realm', 'location', 'weapon', 'technique', 'status', 'mentor',
+      'faction', 'title', 'species', 'element', 'relationship',
+    ]);
+
+    // 收集已注册实体的 coreEntityId
+    const registeredEntities: Array<{ sketchId: string; coreEntityId: string }> = [];
+    for (const s of sketches) {
+      if (s.coreEntityId && s.status === 'registered') {
+        registeredEntities.push({ sketchId: s.id, coreEntityId: s.coreEntityId });
+      }
+    }
+    if (registeredEntities.length === 0) return result;
+
+    try {
+      const db = this.store.getDatabase();
+      // 批量查询所有已注册实体的 scalar Fact
+      const placeholders = registeredEntities.map(() => '?').join(',');
+      const facts = db.prepare(
+        `SELECT subject, predicate, value_scalar
+         FROM facts
+         WHERE subject IN (${placeholders})
+           AND value_type = 'scalar' AND value_scalar IS NOT NULL
+           AND valid_to IS NULL
+         ORDER BY valid_from DESC`,
+      ).all(...registeredEntities.map(e => e.coreEntityId)) as Array<{
+        subject: string; predicate: string; value_scalar: string;
+      }>;
+
+      // 按 subject 分组，每个 predicate 只取最新一条
+      const seen = new Set<string>();
+      for (const f of facts) {
+        if (!DISPLAY_PREDICATES.has(f.predicate)) continue;
+        const key = `${f.subject}:${f.predicate}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const sketchId = registeredEntities.find(e => e.coreEntityId === f.subject)?.sketchId;
+        if (!sketchId) continue;
+
+        const attrs = result.get(sketchId) ?? [];
+        attrs.push({ predicate: f.predicate, value: f.value_scalar });
+        result.set(sketchId, attrs);
+      }
+    } catch {
+      // facts 表查询失败不阻断——节点降级为无属性
+    }
+
+    return result;
   }
 
   /**
