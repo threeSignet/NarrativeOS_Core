@@ -55,21 +55,22 @@
 
 ---
 
-## 各模块完成度基线（2026-06-14）
+## 各模块完成度基线（2026-06-25，Phase 8 审核后）
 
 | 写作层模块 | 完成度 | 主缺口 |
 |---|---|---|
-| 存储/DDL/类型/状态机 | ~100% | W14 闭合（ProposalView/AuditLog sourceRefs 持久化 + resolveDecision→WritingError）；W3/W10 已闭合；P1-2 三热表乐观锁已闭合（Project/ProposalView/EntitySketch version 列 + expectedVersion 参数） |
-| EntityService | ~90% | W4/W16/W17 |
+| 存储/DDL/类型/状态机 | ~100% | Phase 8 三表（writing_relations/associations/relation_hints）+ softDeleteProject 级联 + updateRelationCandidate 乐观锁已闭合 |
+| EntityService | ~95% | W4/W16/W17 已闭合；Phase 8 图谱化增强（attributes/summary/tags）|
 | IdeaService | ~85% | discard/restore 绕状态机 |
-| DraftService | ~95% | W7/W10-c 已闭合；W15 |
+| DraftService | ~95% | W7/W10-c/W15 已闭合 |
 | BlueprintService | ~80% | 类型提取脆弱 |
-| ProjectService | ~95% | W10-b/W12 已闭合（transitionProjectStatus + §3.1 组合初始化含新表 WorkspaceLayout/PreferenceProfile） |
-| CoreBridge | ~75% | W8/W9/W10-a 已闭合 |
-| Agent §8 改造 | ~90% | W1/W13/W2 已闭合（§8.5 双轨统一 + /auto writingLayer 自动提交 + /review；W2 permission-check 矩阵 + caller-tagged 强制点 + renderProposalForUser 接入 + context-assembly 注入；Fix-3 世界段注入 worldSnapshot 预取穿透至 LLM system message）；dispatcher 推迟到 ReAct 改造 |
-| ViewModel/过滤 | ~85% | W6/W7/W8 已闭合（ProjectHome + Proposal Review + WorldSnapshot 投影 + filter/labels 范本）；EntityProfile/DraftEditor 视图待对应功能点 |
-| Proposal Review 数据 | ~95% | W7（存储层四件套）+ W13 task #9（/review 三分支命令：列表/详情/重推，sketch 名称解析不泄漏 ent_）已闭合；手动 chat 烟测待 API key |
-| Error 模型 | ~88% | W11 已闭合（ERROR_RECOVERY_MAP 接入 + 错误码补抛 + 枚举统一；AGENT_* 死码已由 W2 assertAgentMayCall 激活 throw 点 + 恢复文案；Fix-4 COMMIT_WITHOUT_REVIEW throw 点已由 handleConfirmCommit 守卫激活；W14 resolveDecision 激活 INVALID_STATUS_TRANSITION throw 点）；前瞻码待 W16/task#9（CORE_REF_STALE 仍前瞻声明——Core 引用失效检测属后续功能） |
-| 测试 | ~100% | W18/W19 已全部完成（全部使用真实 LLM，无 Mock）；P1-2 乐观锁测试已闭合；writing-loop.test.ts 已删除（冗余，由 writing-main-loop.test.ts 覆盖）；0 skipped 测试。剩余：MockEmbedder（Phase5 范围）；tsconfig exclude tests 致测试无类型保护（独立问题） |
+| ProjectService | ~95% | W10-b/W12 已闭合 |
+| RelationService | ~100% | Phase 8 新增：关系候选/创作关联/检测提示 CRUD + 状态机 + 提交 Core |
+| GraphService | ~95% | Phase 8 新增：buildGraphView + exportGraph + loadEntityAttributes；测试补全 7 用例 |
+| CoreBridge | ~90% | 4 新通道（thread/knowledge/worldPackage/retcon）审计补全（sourceRefs/writebackError/createCoreRef/partial）已闭合 |
+| Agent §8 改造 | ~90% | W1/W13/W2 已闭合；Tool 12 detect_relation_hints + Tool 13 get_graph_view 已接入 |
+| ViewModel/过滤 | ~90% | W6/W7/W8 已闭合；WRITING_TABLE_NAMES 补全 Phase 8 三表 |
+| Error 模型 | ~90% | W11 已闭合；tool-router 输入校验补全 |
+| 测试 | ~100% | 815 测试全绿，0 skipped；Phase 8 核心测试（agent-tools/corebridge-channels/relations）已补全 |
 
-**总计**：150 Phase 7 功能点 → ✅~98% / ⚠️~2%（W1-W19 + P1-2 + writing-loop 清理全部完成，0 skipped 测试，无 Mock。剩余：状态版本 projectId 参数化、simulateProposal 重推回写，均属 Phase 8 多项目场景才暴露）。
+**总计**：Phase 8（Roadmap 6 项 + 扩展 3 项 + Agent 工具 2 项）→ ✅ 100% 完成。P0/P1 清零，P2 修 15/30 项（剩余 15 项为设计选择/误报/有意保留）。可进 Phase 9。
