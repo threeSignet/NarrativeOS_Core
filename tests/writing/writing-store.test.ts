@@ -26,7 +26,7 @@ describe('WritingStore 建表验证', () => {
   // 建表验证 — 确认 11 张表全部创建
   // =============================================================================
 
-  it('19 张表全部创建成功（13 原 + 3 Phase 8 + 3 Phase 9）', () => {
+  it('21 张表全部创建成功（13 原 + 3 Phase 8 + 3 Phase 9 + 2 Phase 10）', () => {
     const tables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'writing_%' ORDER BY name"
     ).all() as Array<{ name: string }>;
@@ -54,7 +54,10 @@ describe('WritingStore 建表验证', () => {
     expect(names).toContain('writing_spatial_nodes');
     expect(names).toContain('writing_spatial_edges');
     expect(names).toContain('writing_spatial_views');
-    expect(tables.length).toBe(19);
+    // Phase 10：章节规划 + 场景规划
+    expect(names).toContain('writing_chapter_plans');
+    expect(names).toContain('writing_scene_plans');
+    expect(tables.length).toBe(21);
   });
 
   // =============================================================================

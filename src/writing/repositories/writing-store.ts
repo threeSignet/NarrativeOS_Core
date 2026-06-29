@@ -48,6 +48,8 @@ import type {
   WritingSpatialNode, SpatialNodeMaturity, SpatialNodeStatus,
   WritingSpatialEdge, SpatialEdgeStatus, SpatialEdgeLayer, SpatialEdgeDirection, SpatialTraversalRule,
   SpatialView,
+  ChapterPlan, ChapterPlanStatus,
+  ScenePlan, ScenePlanStatus, ScenePurpose,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
@@ -61,6 +63,8 @@ import {
   validateRelationCandidateTransition,
   validateSpatialNodeMaturity,
   validateSpatialEdgeStatus,
+  validateChapterPlanStatus,
+  validateScenePlanStatus,
 } from '../models/state-machine.js';
 
 // =============================================================================
@@ -474,6 +478,50 @@ CREATE TABLE IF NOT EXISTS writing_spatial_views (
   FOREIGN KEY (project_id) REFERENCES writing_projects(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wsv_project ON writing_spatial_views(project_id);
+
+-- W.20 writing_chapter_plans：章节规划（Phase 10）
+CREATE TABLE IF NOT EXISTS writing_chapter_plans (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL,
+  sort_order          INTEGER NOT NULL DEFAULT 0,
+  title               TEXT NOT NULL,
+  goals_json          TEXT NOT NULL DEFAULT '[]',
+  pov_entity_id       TEXT,
+  linked_scene_ids_json  TEXT NOT NULL DEFAULT '[]',
+  linked_thread_ids_json TEXT NOT NULL DEFAULT '[]',
+  linked_draft_ids_json  TEXT NOT NULL DEFAULT '[]',
+  status              TEXT NOT NULL DEFAULT 'planned',
+  version             INTEGER NOT NULL DEFAULT 1,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at          TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wcplan_project ON writing_chapter_plans(project_id, status);
+
+-- W.21 writing_scene_plans：场景规划（Phase 10）
+CREATE TABLE IF NOT EXISTS writing_scene_plans (
+  id                    TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  chapter_id            TEXT NOT NULL,
+  sort_order            INTEGER NOT NULL DEFAULT 0,
+  title                 TEXT NOT NULL,
+  purpose_json          TEXT NOT NULL DEFAULT '[]',
+  pov_entity_id         TEXT,
+  spatial_node_id       TEXT,
+  temporal_ref          TEXT,
+  participants_json     TEXT NOT NULL DEFAULT '[]',
+  expected_outcome      TEXT,
+  linked_prose_block_ids_json TEXT NOT NULL DEFAULT '[]',
+  status                TEXT NOT NULL DEFAULT 'planned',
+  version               INTEGER NOT NULL DEFAULT 1,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at            TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id),
+  FOREIGN KEY (chapter_id) REFERENCES writing_chapter_plans(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wsplan_chapter ON writing_scene_plans(chapter_id, status);
 `;
 
 // =============================================================================
@@ -1119,6 +1167,9 @@ export class SQLiteWritingStore {
       'writing_spatial_nodes',
       'writing_spatial_edges',
       'writing_spatial_views',
+      // Phase 10（W.20/W.21）：章节规划/场景规划，生命周期跟随项目。
+      'writing_chapter_plans',
+      'writing_scene_plans',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -2545,6 +2596,185 @@ export class SQLiteWritingStore {
       positions: safeParseJson(row['positions_json'] as string, row['id'] as string, 'positions') as Record<string, { x: number; y: number; z?: number }>,
       filters: safeParseJson(row['filters_json'] as string, row['id'] as string, 'filters') as Record<string, unknown>,
       createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 10：章节规划 CRUD（W.20）
+  // ===========================================================================
+
+  createChapterPlan(projectId: string, input: {
+    order: number; title: string; goals?: string[];
+    povEntityId?: string; linkedSceneIds?: string[];
+    linkedThreadIds?: string[]; linkedDraftIds?: string[];
+  }): ChapterPlan {
+    const id = `wcplan_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_chapter_plans (id, project_id, sort_order, title, goals_json, pov_entity_id, linked_scene_ids_json, linked_thread_ids_json, linked_draft_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id, projectId, input.order, input.title,
+      JSON.stringify(input.goals ?? []),
+      input.povEntityId ?? null,
+      JSON.stringify(input.linkedSceneIds ?? []),
+      JSON.stringify(input.linkedThreadIds ?? []),
+      JSON.stringify(input.linkedDraftIds ?? []),
+    );
+    return this.getChapterPlan(id)!;
+  }
+
+  getChapterPlan(id: string): ChapterPlan | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_chapter_plans WHERE id = ? AND deleted_at IS NULL'
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToChapterPlan(row) : undefined;
+  }
+
+  listChapterPlans(projectId: string): ChapterPlan[] {
+    return (this.db.prepare(
+      'SELECT * FROM writing_chapter_plans WHERE project_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC'
+    ).all(projectId) as Record<string, unknown>[]).map(r => this.rowToChapterPlan(r));
+  }
+
+  updateChapterPlan(id: string, expectedVersion: number, updates: Partial<{
+    order: number; title: string; goals: string[];
+    povEntityId: string; linkedSceneIds: string[];
+    linkedThreadIds: string[]; linkedDraftIds: string[];
+    status: ChapterPlanStatus;
+  }>): { newVersion: number } {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.order !== undefined) { parts.push('sort_order = ?'); vals.push(updates.order); }
+    if (updates.title !== undefined) { parts.push('title = ?'); vals.push(updates.title); }
+    if (updates.goals !== undefined) { parts.push('goals_json = ?'); vals.push(JSON.stringify(updates.goals)); }
+    if (updates.povEntityId !== undefined) { parts.push('pov_entity_id = ?'); vals.push(updates.povEntityId); }
+    if (updates.linkedSceneIds !== undefined) { parts.push('linked_scene_ids_json = ?'); vals.push(JSON.stringify(updates.linkedSceneIds)); }
+    if (updates.linkedThreadIds !== undefined) { parts.push('linked_thread_ids_json = ?'); vals.push(JSON.stringify(updates.linkedThreadIds)); }
+    if (updates.linkedDraftIds !== undefined) { parts.push('linked_draft_ids_json = ?'); vals.push(JSON.stringify(updates.linkedDraftIds)); }
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_chapter_plans WHERE id = ?').get(id) as { status: string } | undefined;
+      if (current) validateChapterPlanStatus(current.status, updates.status, id);
+      parts.push('status = ?'); vals.push(updates.status);
+    }
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id, expectedVersion);
+    const result = this.db.prepare(`UPDATE writing_chapter_plans SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...vals);
+    if (result.changes === 0) {
+      const row = this.db.prepare('SELECT version FROM writing_chapter_plans WHERE id = ?').get(id) as { version: number } | undefined;
+      if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `章节规划不存在: ${id}`, { objectType: 'chapter_plan', objectId: id });
+      throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `章节规划版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+    }
+    return { newVersion: expectedVersion + 1 };
+  }
+
+  private rowToChapterPlan(row: Record<string, unknown>): ChapterPlan {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      order: row['sort_order'] as number, title: row['title'] as string,
+      goals: safeParseJson(row['goals_json'] as string, row['id'] as string, 'goals') as string[],
+      povEntityId: (row['pov_entity_id'] as string) ?? undefined,
+      linkedSceneIds: safeParseJson(row['linked_scene_ids_json'] as string, row['id'] as string, 'linked_scene_ids') as string[],
+      linkedThreadIds: safeParseJson(row['linked_thread_ids_json'] as string, row['id'] as string, 'linked_thread_ids') as string[],
+      linkedDraftIds: safeParseJson(row['linked_draft_ids_json'] as string, row['id'] as string, 'linked_draft_ids') as string[],
+      status: row['status'] as ChapterPlanStatus,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 10：场景规划 CRUD（W.21）
+  // ===========================================================================
+
+  createScenePlan(projectId: string, input: {
+    chapterId: string; order: number; title: string;
+    purpose?: ScenePurpose[]; povEntityId?: string;
+    spatialNodeId?: string; temporalRef?: string;
+    participants?: string[]; expectedOutcome?: string;
+    linkedProseBlockIds?: string[];
+  }): ScenePlan {
+    const id = `wsplan_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_scene_plans (id, project_id, chapter_id, sort_order, title, purpose_json, pov_entity_id, spatial_node_id, temporal_ref, participants_json, expected_outcome, linked_prose_block_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id, projectId, input.chapterId, input.order, input.title,
+      JSON.stringify(input.purpose ?? []),
+      input.povEntityId ?? null,
+      input.spatialNodeId ?? null,
+      input.temporalRef ?? null,
+      JSON.stringify(input.participants ?? []),
+      input.expectedOutcome ?? null,
+      JSON.stringify(input.linkedProseBlockIds ?? []),
+    );
+    return this.getScenePlan(id)!;
+  }
+
+  getScenePlan(id: string): ScenePlan | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_scene_plans WHERE id = ? AND deleted_at IS NULL'
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToScenePlan(row) : undefined;
+  }
+
+  listScenePlans(projectId: string, options?: { chapterId?: string }): ScenePlan[] {
+    let sql = 'SELECT * FROM writing_scene_plans WHERE project_id = ? AND deleted_at IS NULL';
+    const params: unknown[] = [projectId];
+    if (options?.chapterId) { sql += ' AND chapter_id = ?'; params.push(options.chapterId); }
+    sql += ' ORDER BY sort_order ASC';
+    return (this.db.prepare(sql).all(...params) as Record<string, unknown>[]).map(r => this.rowToScenePlan(r));
+  }
+
+  updateScenePlan(id: string, expectedVersion: number, updates: Partial<{
+    order: number; title: string; purpose: ScenePurpose[];
+    povEntityId: string; spatialNodeId: string; temporalRef: string;
+    participants: string[]; expectedOutcome: string;
+    linkedProseBlockIds: string[]; status: ScenePlanStatus;
+  }>): { newVersion: number } {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.order !== undefined) { parts.push('sort_order = ?'); vals.push(updates.order); }
+    if (updates.title !== undefined) { parts.push('title = ?'); vals.push(updates.title); }
+    if (updates.purpose !== undefined) { parts.push('purpose_json = ?'); vals.push(JSON.stringify(updates.purpose)); }
+    if (updates.povEntityId !== undefined) { parts.push('pov_entity_id = ?'); vals.push(updates.povEntityId); }
+    if (updates.spatialNodeId !== undefined) { parts.push('spatial_node_id = ?'); vals.push(updates.spatialNodeId); }
+    if (updates.temporalRef !== undefined) { parts.push('temporal_ref = ?'); vals.push(updates.temporalRef); }
+    if (updates.participants !== undefined) { parts.push('participants_json = ?'); vals.push(JSON.stringify(updates.participants)); }
+    if (updates.expectedOutcome !== undefined) { parts.push('expected_outcome = ?'); vals.push(updates.expectedOutcome); }
+    if (updates.linkedProseBlockIds !== undefined) { parts.push('linked_prose_block_ids_json = ?'); vals.push(JSON.stringify(updates.linkedProseBlockIds)); }
+    if (updates.status !== undefined) {
+      const current = this.db.prepare('SELECT status FROM writing_scene_plans WHERE id = ?').get(id) as { status: string } | undefined;
+      if (current) validateScenePlanStatus(current.status, updates.status, id);
+      parts.push('status = ?'); vals.push(updates.status);
+    }
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id, expectedVersion);
+    const result = this.db.prepare(`UPDATE writing_scene_plans SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...vals);
+    if (result.changes === 0) {
+      const row = this.db.prepare('SELECT version FROM writing_scene_plans WHERE id = ?').get(id) as { version: number } | undefined;
+      if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `场景规划不存在: ${id}`, { objectType: 'scene_plan', objectId: id });
+      throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `场景规划版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+    }
+    return { newVersion: expectedVersion + 1 };
+  }
+
+  private rowToScenePlan(row: Record<string, unknown>): ScenePlan {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      chapterId: row['chapter_id'] as string, order: row['sort_order'] as number,
+      title: row['title'] as string,
+      purpose: safeParseJson(row['purpose_json'] as string, row['id'] as string, 'purpose') as ScenePurpose[],
+      povEntityId: (row['pov_entity_id'] as string) ?? undefined,
+      spatialNodeId: (row['spatial_node_id'] as string) ?? undefined,
+      temporalRef: (row['temporal_ref'] as string) ?? undefined,
+      participants: safeParseJson(row['participants_json'] as string, row['id'] as string, 'participants') as string[],
+      expectedOutcome: (row['expected_outcome'] as string) ?? undefined,
+      linkedProseBlockIds: safeParseJson(row['linked_prose_block_ids_json'] as string, row['id'] as string, 'linked_prose_block_ids') as string[],
+      status: row['status'] as ScenePlanStatus,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
     };
   }
 }

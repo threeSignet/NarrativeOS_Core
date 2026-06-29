@@ -386,6 +386,56 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         },
       },
     },
+
+    // Tool 16: create_chapter_plan（Phase 10：章节规划）
+    create_chapter_plan: {
+      name: 'create_chapter_plan',
+      description: '创建章节规划。设置章节标题、目标、POV，用于组织叙事结构。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '章节标题' },
+          order: { type: 'number', description: '章节顺序（数字越小越靠前）' },
+          goals: { type: 'array', items: { type: 'string' }, description: '章节目标列表' },
+          pov_entity_id: { type: 'string', description: 'POV 实体 ID（可选）' },
+        },
+        required: ['title', 'order'],
+      },
+    },
+
+    // Tool 17: create_scene_plan（Phase 10：场景规划）
+    create_scene_plan: {
+      name: 'create_scene_plan',
+      description: '创建场景规划。设置场景标题、所属章节、功能标签、参与者，用于组织场景结构。',
+      parameters: {
+        type: 'object',
+        properties: {
+          chapter_id: { type: 'string', description: '所属章节 ID' },
+          title: { type: 'string', description: '场景标题' },
+          order: { type: 'number', description: '场景在章节内的顺序' },
+          purpose: { type: 'array', items: { type: 'string' }, description: '功能标签（setup/conflict/reveal/transition/payoff/reversal/character/worldbuilding）' },
+          participants: { type: 'array', items: { type: 'string' }, description: '参与者实体 ID 列表' },
+          spatial_node_id: { type: 'string', description: '关联的空间节点 ID（可选）' },
+        },
+        required: ['chapter_id', 'title', 'order'],
+      },
+    },
+
+    // Tool 18: get_timeline_view（Phase 10：时间线查询）
+    get_timeline_view: {
+      name: 'get_timeline_view',
+      description: '查询当前项目时间线。合并 Core 已提交事件 + 写作层计划/草案，用于了解"故事发生了什么、计划发生什么"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['world', 'narrative'],
+            description: '时间线模式：world=世界时间顺序，narrative=叙述顺序（默认 world）',
+          },
+        },
+      },
+    },
   };
 }
 
@@ -424,6 +474,13 @@ export class ToolRouter {
   private spatialService: any | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private spatialViewService: any | undefined;
+  // Phase 10：章节/场景/时间线服务（可选注入）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private chapterService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private sceneService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private timelineService: any | undefined;
 
   /** 延迟注入写作层实体检测服务（chat.ts 在 entityService 创建后调用） */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -445,6 +502,15 @@ export class ToolRouter {
   setSpatialServices(spatialService: any, spatialViewService: any, writingProjectId: string): void {
     this.spatialService = spatialService;
     this.spatialViewService = spatialViewService;
+    this.writingProjectId = writingProjectId;
+  }
+
+  /** 延迟注入写作层章节/场景/时间线服务（chat.ts 在服务创建后调用） */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setChapterSceneServices(chapterService: any, sceneService: any, timelineService: any, writingProjectId: string): void {
+    this.chapterService = chapterService;
+    this.sceneService = sceneService;
+    this.timelineService = timelineService;
     this.writingProjectId = writingProjectId;
   }
   // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
@@ -503,6 +569,9 @@ export class ToolRouter {
         case 'get_graph_view':         return await this.handleGetGraphView(params);
         case 'detect_spatial_nodes':   return await this.handleDetectSpatialNodes(params);
         case 'get_spatial_view':       return await this.handleGetSpatialView(params);
+        case 'create_chapter_plan':     return await this.handleCreateChapterPlan(params);
+        case 'create_scene_plan':       return await this.handleCreateScenePlan(params);
+        case 'get_timeline_view':       return await this.handleGetTimelineView(params);
         default:
           return this.error(ToolErrorCode.UNKNOWN_TOOL, `未知工具: ${toolName}`, false, `可用工具: ${this.toolNames().join(', ')}`);
       }
@@ -550,6 +619,7 @@ export class ToolRouter {
       'propose_schema_extension', 'commit_schema_extension',
       'detect_relation_hints', 'get_graph_view',
       'detect_spatial_nodes', 'get_spatial_view',
+      'create_chapter_plan', 'create_scene_plan', 'get_timeline_view',
     ];
   }
 
@@ -1214,6 +1284,116 @@ export class ToolRouter {
     return this.ok({
       nodeCount: data.nodes.length,
       edgeCount: data.edges.length,
+      mode,
+      markdown: lines.join('\n'),
+    });
+  }
+
+  // =========================================================================
+  // Tool 16: create_chapter_plan（Phase 10：章节规划）
+  // =========================================================================
+
+  private async handleCreateChapterPlan(params: Record<string, unknown>) {
+    if (!this.chapterService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '章节服务未配置（写作层未注入）', false, '此工具仅在写作层 CLI 环境可用。');
+    }
+
+    const title = typeof params['title'] === 'string' ? params['title'] : '';
+    const order = typeof params['order'] === 'number' ? params['order'] : 0;
+    if (!title) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'title 必须是非空字符串', false);
+
+    const ctx = this.makeToolContext('chapter');
+    const chapter = this.chapterService.createChapter(ctx, {
+      title, order,
+      goals: Array.isArray(params['goals']) ? params['goals'] as string[] : undefined,
+      povEntityId: typeof params['pov_entity_id'] === 'string' ? params['pov_entity_id'] : undefined,
+    });
+
+    return this.ok({
+      id: chapter.id,
+      title: chapter.title,
+      order: chapter.order,
+      status: chapter.status,
+      message: `章节「${chapter.title}」已创建（顺序 ${chapter.order}）。用 /chapter list 查看。`,
+    });
+  }
+
+  // =========================================================================
+  // Tool 17: create_scene_plan（Phase 10：场景规划）
+  // =========================================================================
+
+  private async handleCreateScenePlan(params: Record<string, unknown>) {
+    if (!this.sceneService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '场景服务未配置（写作层未注入）', false, '此工具仅在写作层 CLI 环境可用。');
+    }
+
+    const chapterId = typeof params['chapter_id'] === 'string' ? params['chapter_id'] : '';
+    const title = typeof params['title'] === 'string' ? params['title'] : '';
+    const order = typeof params['order'] === 'number' ? params['order'] : 0;
+    if (!chapterId || !title) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'chapter_id 和 title 必须是非空字符串', false);
+
+    const ctx = this.makeToolContext('scene');
+    const scene = this.sceneService.createScene(ctx, {
+      chapterId, title, order,
+      purpose: Array.isArray(params['purpose']) ? params['purpose'] as string[] as any : undefined,
+      participants: Array.isArray(params['participants']) ? params['participants'] as string[] : undefined,
+      spatialNodeId: typeof params['spatial_node_id'] === 'string' ? params['spatial_node_id'] : undefined,
+    });
+
+    return this.ok({
+      id: scene.id,
+      title: scene.title,
+      chapterId: scene.chapterId,
+      order: scene.order,
+      status: scene.status,
+      message: `场景「${scene.title}」已创建（章节 ${scene.chapterId}，顺序 ${scene.order}）。`,
+    });
+  }
+
+  // =========================================================================
+  // Tool 18: get_timeline_view（Phase 10：时间线查询）
+  // =========================================================================
+
+  private async handleGetTimelineView(params: Record<string, unknown>) {
+    if (!this.timelineService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '时间线服务未配置（写作层未注入）', false, '此工具仅在写作层 CLI 环境可用。');
+    }
+
+    const mode = typeof params['mode'] === 'string' && params['mode'] === 'narrative'
+      ? 'narrative' as const
+      : 'world' as const;
+
+    const ctx = this.makeToolContext('timeline');
+    const timeline = this.timelineService.buildTimelineView(ctx, mode);
+
+    // 渲染为 Agent 可读的文本摘要
+    const lines: string[] = [];
+    lines.push(`## 时间线（${mode}）\n`);
+    lines.push(`**${timeline.items.length} 个条目**\n`);
+
+    if (timeline.items.length === 0) {
+      lines.push('暂无时间线条目。用 create_chapter_plan / create_scene_plan 创建规划。');
+    } else {
+      const byLayer = new Map<string, typeof timeline.items>();
+      for (const item of timeline.items) {
+        const list = byLayer.get(item.sourceLayer) ?? [];
+        list.push(item);
+        byLayer.set(item.sourceLayer, list);
+      }
+
+      for (const [layer, items] of byLayer) {
+        const layerLabel = layer === 'committed' ? '已提交' : layer === 'planned' ? '计划' : layer;
+        lines.push(`### ${layerLabel}（${items.length}）`);
+        for (const item of items) {
+          const ch = item.worldTime?.chapter ? ` Ch.${item.worldTime.chapter}` : '';
+          lines.push(`- ${item.label}${ch} [${item.statusLabel}]`);
+        }
+        lines.push('');
+      }
+    }
+
+    return this.ok({
+      itemCount: timeline.items.length,
       mode,
       markdown: lines.join('\n'),
     });

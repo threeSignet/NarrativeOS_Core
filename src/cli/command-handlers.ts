@@ -1128,3 +1128,120 @@ export function handleBlueprintAddSpatialType(deps: CliDeps, cmd: ParsedCommand)
   } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
   return lines;
 }
+
+// ===========================================================================
+// Phase 10：/chapter /scene /timeline 命令
+// ===========================================================================
+
+/** /chapter list|add */
+export async function handleChapter(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const sub = cmd.positional[0];
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cs = (deps as any).chapterService as {
+    createChapter: (ctx: unknown, p: { order: number; title: string; goals?: string[] }) => { id: string; title: string; order: number; status: string };
+  } | undefined;
+
+  if (sub === 'add') {
+    const title = cmd.positional[1];
+    if (!title) { lines.push(`${C.yellow}用法：/chapter add <标题> [--order N]${C.reset}`); return lines; }
+    if (!cs) { lines.push(`${C.red}❌ ChapterService 未注入${C.reset}`); return lines; }
+    const order = Number(cmd.flags['order']) || 999;
+    if (!cs) { lines.push(`${C.red}❌ ChapterService 未注入${C.reset}`); return lines; }
+    try {
+      const ch = cs.createChapter(ctx, { title, order });
+      lines.push(`${C.green}✅ 章节规划已创建${C.reset}`);
+      lines.push(`  ${C.gray}id: ${ch.id} | title: ${ch.title} | order: ${ch.order}${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  // 默认 list
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const store = (deps as any).writingStore as { listChapterPlans: (pid: string) => Array<{ id: string; title: string; order: number; status: string; linkedSceneIds: string[] }> };
+  if (!store) { lines.push(`${C.red}❌ WritingStore 未注入${C.reset}`); return lines; }
+  const chapters = store.listChapterPlans(deps.projectId);
+  lines.push(`${C.boldYellow}📖 章节规划（${chapters.length} 章）${C.reset}`);
+  for (const ch of chapters) {
+    lines.push(`  [${ch.status}] Ch.${ch.order} ${ch.title} ${C.gray}(${ch.linkedSceneIds.length} 场景)${C.reset}`);
+  }
+  lines.push(`\n  ${C.gray}子命令：/chapter add <标题> [--order N]${C.reset}`);
+  return lines;
+}
+
+/** /scene list|add */
+export async function handleScene(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const sub = cmd.positional[0];
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ss = (deps as any).sceneService as {
+    createScene: (ctx: unknown, p: { chapterId: string; title: string; order: number }) => { id: string; title: string; chapterId: string; order: number; status: string };
+  } | undefined;
+
+  if (sub === 'add') {
+    const [chapterId, title] = cmd.positional.slice(1);
+    if (!chapterId || !title) { lines.push(`${C.yellow}用法：/scene add <章节id> <标题> [--order N]${C.reset}`); return lines; }
+    if (!ss) { lines.push(`${C.red}❌ SceneService 未注入${C.reset}`); return lines; }
+    const order = Number(cmd.flags['order']) || 999;
+    try {
+      const sc = ss.createScene(ctx, { chapterId, title, order });
+      lines.push(`${C.green}✅ 场景规划已创建${C.reset}`);
+      lines.push(`  ${C.gray}id: ${sc.id} | title: ${sc.title} | chapter: ${sc.chapterId} | order: ${sc.order}${C.reset}`);
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  // 默认 list
+  const chapterFilter = cmd.flags['chapter'] as string | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const store = (deps as any).writingStore as { listScenePlans: (pid: string, opts?: { chapterId?: string }) => Array<{ id: string; title: string; chapterId: string; order: number; status: string; purpose: string[] }> };
+  if (!store) { lines.push(`${C.red}❌ WritingStore 未注入${C.reset}`); return lines; }
+  const scenes = store.listScenePlans(deps.projectId, chapterFilter ? { chapterId: chapterFilter } : undefined);
+  lines.push(`${C.boldYellow}🎬 场景规划（${scenes.length} 场景）${C.reset}`);
+  for (const sc of scenes) {
+    const purpose = sc.purpose.length > 0 ? ` [${sc.purpose.join(',')}]` : '';
+    lines.push(`  [${sc.status}] ${sc.title}${purpose} ${C.gray}(${sc.id})${C.reset}`);
+  }
+  lines.push(`\n  ${C.gray}子命令：/scene add <章节id> <标题> [--order N] | /scene list --chapter <id>${C.reset}`);
+  return lines;
+}
+
+/** /timeline — 时间线视图 */
+export async function handleTimeline(deps: CliDeps, _cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ts = (deps as any).timelineService as {
+    buildTimelineView: (ctx: unknown, mode: string) => { items: Array<{ id: string; label: string; sourceLayer: string; worldTime?: { chapter: number }; statusLabel: string }> };
+  } | undefined;
+
+  if (!ts) { lines.push(`${C.red}❌ TimelineService 未注入${C.reset}`); return lines; }
+
+  try {
+    const timeline = ts.buildTimelineView(ctx, 'world');
+    lines.push(`${C.boldYellow}⏳ 时间线${C.reset}`);
+    lines.push(`  条目：${timeline.items.length} 个`);
+
+    if (timeline.items.length === 0) {
+      lines.push(`\n  ${C.gray}暂无时间线条目。用 /chapter add 和 /scene add 创建规划。${C.reset}`);
+    } else {
+      const byLayer = new Map<string, typeof timeline.items>();
+      for (const item of timeline.items) {
+        const list = byLayer.get(item.sourceLayer) ?? [];
+        list.push(item);
+        byLayer.set(item.sourceLayer, list);
+      }
+      for (const [layer, items] of byLayer) {
+        const label = layer === 'committed' ? '已提交' : layer === 'planned' ? '计划' : layer;
+        lines.push(`\n  ${C.boldCyan}${label}（${items.length}）${C.reset}`);
+        for (const item of items) {
+          const ch = item.worldTime?.chapter ? ` Ch.${item.worldTime.chapter}` : '';
+          lines.push(`    ${item.label}${ch} ${C.gray}(${item.statusLabel})${C.reset}`);
+        }
+      }
+    }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}

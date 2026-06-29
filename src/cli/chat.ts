@@ -31,6 +31,7 @@ import {
   handleEntityDeprecate, handleBlueprintGenerate, handleBlueprintAccept,
   handleBlueprintAcceptSuggestion, handleBlueprintRejectSuggestion,
   handleBlueprintAddSpatialType,
+  handleChapter, handleScene, handleTimeline,
   handleGraph, handleRelation, handleAssociation,
   handleSpatial, handleMap,
   type CliDeps,
@@ -187,10 +188,19 @@ const { SpatialViewService } = await import('../writing/services/spatial-view-se
 const spatialService = new SpatialService(writingStore, auditService, workflowService, coreBridge);
 const spatialViewService = new SpatialViewService(writingStore);
 
+// Phase 10：章节/场景/时间线服务
+const { ChapterService } = await import('../writing/services/chapter-service.js');
+const { SceneService } = await import('../writing/services/scene-service.js');
+const { TimelineService } = await import('../writing/services/timeline-service.js');
+const chapterService = new ChapterService(writingStore, auditService);
+const sceneService = new SceneService(writingStore, auditService);
+const timelineService = new TimelineService(writingStore);
+
 // 延迟注入实体检测服务到 ToolRouter（detect_entity_hints 工具需要；entityService/writingProjectId 此时就绪）
 toolRouter.setEntityService(entityService, writingProjectId);
 toolRouter.setGraphServices(relationService, graphService, writingProjectId);
 toolRouter.setSpatialServices(spatialService, spatialViewService, writingProjectId);
+toolRouter.setChapterSceneServices(chapterService, sceneService, timelineService, writingProjectId);
 
 // Agent
 const llm = new DeepSeekLLMClientAdapter();
@@ -360,6 +370,10 @@ async function handleCommand(input: string): Promise<boolean> {
     // Phase 9：空间命令
     case '/spatial': printLines(await handleSpatial(cliDeps, parsed)); return false;
     case '/map': printLines(await handleMap(cliDeps, parsed)); return false;
+    // Phase 10：章节/场景/时间线命令
+    case '/chapter': printLines(await handleChapter(cliDeps, parsed)); return false;
+    case '/scene': printLines(await handleScene(cliDeps, parsed)); return false;
+    case '/timeline': printLines(await handleTimeline(cliDeps, parsed)); return false;
   }
 
   switch (cmd) {
@@ -405,6 +419,13 @@ async function handleCommand(input: string): Promise<boolean> {
     /spatial add-node <名> <类型> [描述]   添加空间节点
     /spatial add-edge <源> <目标> <类型>   添加空间边
     /spatial confirm-edge <id>             确认空间边
+
+  \x1b[1;33m章节/场景\x1b[0m
+    /chapter list               章节规划列表
+    /chapter add <标题> [--order N]  创建章节规划
+    /scene list [--chapter <id>]     场景规划列表
+    /scene add <chapterId> <标题> [--order N]  创建场景规划
+    /timeline                   时间线视图
 
   \x1b[1;33m系统\x1b[0m
     /state                 总览面板（计数 + 导航）

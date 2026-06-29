@@ -769,3 +769,128 @@ export interface SpatialView {
   createdAt: string;
   updatedAt: string;
 }
+
+// =============================================================================
+// Phase 10：章节规划 / 场景规划 / 时间线（Feature-Spec §14-§15）
+// =============================================================================
+
+/** 章节规划状态 */
+export type ChapterPlanStatus = 'planned' | 'drafting' | 'written' | 'revising' | 'done';
+
+/** 场景规划状态 */
+export type ScenePlanStatus = 'planned' | 'drafting' | 'written' | 'reviewing' | 'done' | 'cut';
+
+/** 场景功能标签 */
+export type ScenePurpose =
+  | 'setup' | 'conflict' | 'reveal' | 'transition'
+  | 'payoff' | 'reversal' | 'character' | 'worldbuilding';
+
+/**
+ * 章节规划——写作层叙事组织，不写 Core
+ * Feature-Spec §14.2
+ */
+export interface ChapterPlan {
+  id: string;
+  projectId: string;
+  /** 章节在作品中的顺序（写作层顺序，非 Core 事件时间） */
+  order: number;
+  title: string;
+  /** 章节目标列表 */
+  goals: string[];
+  /** POV 实体 ID（可选） */
+  povEntityId?: string;
+  /** 关联的场景 ID 列表 */
+  linkedSceneIds: string[];
+  /** 关联的线索 ID 列表 */
+  linkedThreadIds: string[];
+  /** 关联的草案 ID 列表（一个章节可有多个草案版本） */
+  linkedDraftIds: string[];
+  status: ChapterPlanStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/**
+ * 场景规划——正文/事件/世界状态之间的桥梁，不写 Core
+ * Feature-Spec §14.3
+ */
+export interface ScenePlan {
+  id: string;
+  projectId: string;
+  /** 所属章节 ID */
+  chapterId: string;
+  /** 场景在章节内的顺序 */
+  order: number;
+  title: string;
+  /** 场景功能标签 */
+  purpose: ScenePurpose[];
+  /** POV 实体 ID */
+  povEntityId?: string;
+  /** 关联的空间节点 ID */
+  spatialNodeId?: string;
+  /** 时间引用（章内时间点或模糊描述） */
+  temporalRef?: string;
+  /** 参与者实体 ID 列表 */
+  participants: string[];
+  /** 场景预期结果 */
+  expectedOutcome?: string;
+  /** 关联的正文块 ID 列表 */
+  linkedProseBlockIds: string[];
+  status: ScenePlanStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/** 时间线视图模式 */
+export type TimelineViewMode = 'world' | 'narrative' | 'character' | 'thread';
+
+/** 时间线条目来源层 */
+export type TimelineItemSourceLayer =
+  | 'committed'    // Core 已提交事件
+  | 'planned'      // 写作层计划事件
+  | 'draft'        // 草案事件
+  | 'candidate'    // 候选事件（Proposal Review）
+  | 'retcon_preview'; // Retcon 预览
+
+/**
+ * 时间线视图——合并 Core 事件 + 写作层计划/草案，不写 Core
+ * Feature-Spec §15.1
+ */
+export interface TimelineView {
+  id: string;
+  projectId: string;
+  mode: TimelineViewMode;
+  items: TimelineItemView[];
+  filters: TimelineFilter;
+}
+
+/** 时间线条目 */
+export interface TimelineItemView {
+  id: string;
+  label: string;
+  /** 来源对象引用 */
+  sourceRef: WritingObjectRef;
+  /** 来源层（区分 committed/planned/draft 等） */
+  sourceLayer: TimelineItemSourceLayer;
+  /** 世界时间（故事世界中的发生时间，来自 Core 或计划） */
+  worldTime?: { chapter: number; order?: number };
+  /** 叙述顺序（读者看到的顺序） */
+  narrativeOrder?: number;
+  /** 状态标签 */
+  statusLabel: string;
+  /** 涉及的实体 ID 列表 */
+  involvedEntityIds?: string[];
+  /** 受 Retcon 影响标记 */
+  affectedByRetcon?: boolean;
+}
+
+/** 时间线过滤器 */
+export interface TimelineFilter {
+  sourceLayers?: TimelineItemSourceLayer[];
+  entityIds?: string[];
+  chapterRange?: { from: number; to: number };
+}

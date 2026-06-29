@@ -334,3 +334,52 @@ export function validateSpatialEdgeStatus(
     );
   }
 }
+
+// ===========================================================================
+// Phase 10：章节规划 + 场景规划状态机
+// ===========================================================================
+
+/** 章节规划状态转换 */
+const CHAPTER_PLAN_STATUS_TRANSITIONS: Record<string, string[]> = {
+  planned: ['drafting'],
+  drafting: ['written', 'planned'],
+  written: ['revising', 'planned'],
+  revising: ['written', 'done'],
+  done: ['revising'],
+};
+
+export function validateChapterPlanStatus(
+  currentStatus: string, targetStatus: string, chapterId: string,
+): void {
+  if (currentStatus === targetStatus) return;
+  const allowed = CHAPTER_PLAN_STATUS_TRANSITIONS[currentStatus];
+  if (!allowed || !allowed.includes(targetStatus)) {
+    throw new StateMachineError(
+      WritingErrorCode.INVALID_STATUS_TRANSITION,
+      currentStatus, targetStatus, 'ChapterPlan', chapterId,
+    );
+  }
+}
+
+/** 场景规划状态转换 */
+const SCENE_PLAN_STATUS_TRANSITIONS: Record<string, string[]> = {
+  planned: ['drafting'],
+  drafting: ['written', 'planned', 'cut'],
+  written: ['reviewing', 'planned', 'cut'],
+  reviewing: ['done', 'written', 'cut'],
+  done: ['revising', 'cut'],
+  cut: ['planned'],
+};
+
+export function validateScenePlanStatus(
+  currentStatus: string, targetStatus: string, sceneId: string,
+): void {
+  if (currentStatus === targetStatus) return;
+  const allowed = SCENE_PLAN_STATUS_TRANSITIONS[currentStatus];
+  if (!allowed || !allowed.includes(targetStatus)) {
+    throw new StateMachineError(
+      WritingErrorCode.INVALID_STATUS_TRANSITION,
+      currentStatus, targetStatus, 'ScenePlan', sceneId,
+    );
+  }
+}
