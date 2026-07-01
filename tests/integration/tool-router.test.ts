@@ -66,13 +66,13 @@ describe('ToolRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('基础功能', () => {
-    it('getDefinitions() 应返回 21 个工具定义（含 Phase 8-11）', () => {
+    it('getDefinitions() 应返回 22 个工具定义（含 Phase 8-11）', () => {
       const defs = router.getDefinitions();
-      expect(defs).toHaveLength(21);
+      expect(defs).toHaveLength(22);
       const names = defs.map(d => d.name).sort();
       expect(names).toEqual([
         'commit_event', 'commit_retcon', 'commit_schema_extension',
-        'create_chapter_plan', 'create_foreshadowing_plan', 'create_reader_knowledge_state', 'create_scene_plan',
+        'create_chapter_plan', 'create_foreshadowing_plan', 'create_reader_knowledge_state', 'create_reveal_plan', 'create_scene_plan',
         'detect_entity_hints', 'detect_relation_hints', 'detect_spatial_nodes',
         'get_context_slice', 'get_foreshadowing_plans', 'get_graph_view', 'get_open_threads', 'get_spatial_view', 'get_timeline_view',
         'propose_event', 'propose_retcon', 'propose_schema_extension',
@@ -80,8 +80,8 @@ describe('ToolRouter', () => {
       ]);
     });
 
-    it('toolNames() 应返回 21 个名称', () => {
-      expect(router.toolNames()).toHaveLength(21);
+    it('toolNames() 应返回 22 个名称', () => {
+      expect(router.toolNames()).toHaveLength(22);
     });
 
     it('每个 ToolDefinition 应有 name/description/parameters', () => {

@@ -1019,3 +1019,43 @@ export interface PayoffPlan {
   createdAt: string;
   updatedAt: string;
 }
+
+/** 揭示里程碑类型 */
+export type RevealMilestoneKind = 'first_hint' | 'strengthened_hint' | 'formal_reveal' | 'payoff';
+
+/** 揭示计划状态 */
+export type RevealPlanStatus = 'planned' | 'executing' | 'revealed' | 'abandoned';
+
+/**
+ * 揭示计划——某个真相何时让读者知道
+ * Feature-Spec §16.3
+ */
+export interface RevealPlan {
+  id: string;
+  projectId: string;
+  label: string;
+  /** 揭示内容描述 */
+  subjectDescription: string;
+  /** 关联的线索 ID */
+  linkedThreadId?: string;
+  /** 目标读者反应 */
+  targetReaderEffect?: string;
+  status: RevealPlanStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/**
+ * 揭示里程碑——暗示/加强/揭示/回收的具体位置
+ */
+export interface RevealMilestone {
+  id: string;
+  revealPlanId: string;
+  kind: RevealMilestoneKind;
+  chapterId?: string;
+  sceneId?: string;
+  description: string;
+  createdAt: string;
+}

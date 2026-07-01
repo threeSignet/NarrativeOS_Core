@@ -53,6 +53,26 @@ describe('Phase 11 · ForeshadowingService', () => {
     expect(payoff.id).toMatch(/^wpp_/);
     expect(payoff.kind).toBe('truth_reveal');
   });
+
+  it('创建揭示计划', () => {
+    const reveal = service.createRevealPlan(ctx, { label: '诛仙剑真相', subjectDescription: '剑的来历和力量来源' });
+    expect(reveal.id).toMatch(/^wrp_/);
+    expect(reveal.label).toBe('诛仙剑真相');
+    expect(reveal.status).toBe('planned');
+  });
+
+  it('更新揭示计划状态', () => {
+    const reveal = service.createRevealPlan(ctx, { label: 'A', subjectDescription: '测试' });
+    service.updateRevealPlanStatus(ctx, reveal.id, 'executing');
+    expect(store.getRevealPlan(reveal.id)!.status).toBe('executing');
+  });
+
+  it('创建揭示里程碑', () => {
+    const reveal = service.createRevealPlan(ctx, { label: 'A', subjectDescription: '测试' });
+    const milestone = service.createRevealMilestone(ctx, { revealPlanId: reveal.id, kind: 'first_hint', description: '第一次暗示', chapterId: 'ch_1' });
+    expect(milestone.id).toMatch(/^wrm_/);
+    expect(milestone.kind).toBe('first_hint');
+  });
 });
 
 describe('Phase 11 · ReaderService', () => {

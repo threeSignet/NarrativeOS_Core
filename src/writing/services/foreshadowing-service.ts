@@ -1,7 +1,7 @@
 // =============================================================================
 // Phase 11 · ForeshadowingService——伏笔与悬念业务逻辑
 // =============================================================================
-// 职责：伏笔计划 CRUD + 暗示节点 + 回收计划
+// 职责：伏笔计划 CRUD + 暗示节点 + 回收计划 + 揭示计划
 // 核心不变式：伏笔计划不自动写 Core Thread
 // =============================================================================
 
@@ -13,6 +13,7 @@ import type {
   ForeshadowingPlan, ForeshadowingPlanStatus, ForeshadowingKind,
   HintOccurrence, HintIntensity, HintVisibility,
   PayoffPlan, PayoffKind,
+  RevealPlan, RevealPlanStatus, RevealMilestone, RevealMilestoneKind,
 } from '../models/types.js';
 
 export class ForeshadowingService {
@@ -48,5 +49,30 @@ export class ForeshadowingService {
     const plan = this.store.createPayoffPlan(input);
     this.audit.record(ctx, { action: 'create_payoff_plan', targetType: 'payoff_plan', targetId: plan.id, result: 'success', detail: { kind: plan.kind } });
     return plan;
+  }
+
+  // --- 揭示计划 ---
+
+  createRevealPlan(ctx: WritingRequestContext, input: {
+    label: string; subjectDescription: string; linkedThreadId?: string; targetReaderEffect?: string;
+  }): RevealPlan {
+    const plan = this.store.createRevealPlan(ctx.projectId, input);
+    this.audit.record(ctx, { action: 'create_reveal_plan', targetType: 'reveal_plan', targetId: plan.id, result: 'success', detail: { label: plan.label } });
+    return plan;
+  }
+
+  updateRevealPlanStatus(ctx: WritingRequestContext, id: string, targetStatus: RevealPlanStatus): void {
+    const plan = this.store.getRevealPlan(id);
+    if (!plan) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `揭示计划不存在: ${id}`);
+    this.store.updateRevealPlan(id, { status: targetStatus });
+    this.audit.record(ctx, { action: 'update_reveal_status', targetType: 'reveal_plan', targetId: id, result: 'success', detail: { from: plan.status, to: targetStatus } });
+  }
+
+  createRevealMilestone(ctx: WritingRequestContext, input: {
+    revealPlanId: string; kind: RevealMilestoneKind; description: string; chapterId?: string; sceneId?: string;
+  }): RevealMilestone {
+    const milestone = this.store.createRevealMilestone(input);
+    this.audit.record(ctx, { action: 'create_reveal_milestone', targetType: 'reveal_milestone', targetId: milestone.id, result: 'success', detail: { kind: input.kind } });
+    return milestone;
   }
 }

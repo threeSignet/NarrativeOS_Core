@@ -55,6 +55,7 @@ import type {
   ForeshadowingPlan, ForeshadowingPlanStatus, ForeshadowingKind,
   HintOccurrence, HintIntensity, HintVisibility, HintOccurrenceStatus,
   PayoffPlan, PayoffPlanStatus, PayoffKind,
+  RevealPlan, RevealPlanStatus, RevealMilestone, RevealMilestoneKind,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
@@ -609,6 +610,36 @@ CREATE TABLE IF NOT EXISTS writing_payoff_plans (
   FOREIGN KEY (foreshadowing_plan_id) REFERENCES writing_foreshadowing_plans(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wpp_plan ON writing_payoff_plans(foreshadowing_plan_id);
+
+-- W.27 writing_reveal_plans：揭示计划（Phase 11 §16.3）
+CREATE TABLE IF NOT EXISTS writing_reveal_plans (
+  id                    TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  label                 TEXT NOT NULL,
+  subject_description   TEXT NOT NULL DEFAULT '',
+  linked_thread_id      TEXT,
+  target_reader_effect  TEXT,
+  status                TEXT NOT NULL DEFAULT 'planned',
+  version               INTEGER NOT NULL DEFAULT 1,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at            TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wrp_project ON writing_reveal_plans(project_id, status);
+
+-- W.28 writing_reveal_milestones：揭示里程碑（Phase 11 §16.3）
+CREATE TABLE IF NOT EXISTS writing_reveal_milestones (
+  id              TEXT PRIMARY KEY,
+  reveal_plan_id  TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  chapter_id      TEXT,
+  scene_id        TEXT,
+  description     TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (reveal_plan_id) REFERENCES writing_reveal_plans(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wrm_plan ON writing_reveal_milestones(reveal_plan_id);
 `;
 
 // =============================================================================
@@ -1260,6 +1291,7 @@ export class SQLiteWritingStore {
       // Phase 11（W.22-W.26）：读者模型/伏笔/暗示/回收，生命周期跟随项目。
       'writing_reader_audiences',
       'writing_foreshadowing_plans',
+      'writing_reveal_plans',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -2987,5 +3019,51 @@ export class SQLiteWritingStore {
 
   listPayoffPlans(foreshadowingPlanId: string): PayoffPlan[] {
     return this.db.prepare('SELECT * FROM writing_payoff_plans WHERE foreshadowing_plan_id = ?').all(foreshadowingPlanId) as PayoffPlan[];
+  }
+
+  // ===========================================================================
+  // Phase 11：揭示计划 CRUD（W.27/W.28）
+  // ===========================================================================
+
+  createRevealPlan(projectId: string, input: {
+    label: string; subjectDescription: string; linkedThreadId?: string; targetReaderEffect?: string;
+  }): RevealPlan {
+    const id = `wrp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_reveal_plans (id, project_id, label, subject_description, linked_thread_id, target_reader_effect) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, input.label, input.subjectDescription, input.linkedThreadId ?? null, input.targetReaderEffect ?? null);
+    return this.db.prepare('SELECT * FROM writing_reveal_plans WHERE id = ?').get(id) as RevealPlan;
+  }
+
+  getRevealPlan(id: string): RevealPlan | undefined {
+    return this.db.prepare('SELECT * FROM writing_reveal_plans WHERE id = ? AND deleted_at IS NULL').get(id) as RevealPlan | undefined;
+  }
+
+  listRevealPlans(projectId: string): RevealPlan[] {
+    return this.db.prepare('SELECT * FROM writing_reveal_plans WHERE project_id = ? AND deleted_at IS NULL').all(projectId) as RevealPlan[];
+  }
+
+  updateRevealPlan(id: string, updates: Partial<{ status: RevealPlanStatus }>): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.status !== undefined) { parts.push('status = ?'); vals.push(updates.status); }
+    if (parts.length === 0) return;
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_reveal_plans SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  createRevealMilestone(input: {
+    revealPlanId: string; kind: RevealMilestoneKind; description: string;
+    chapterId?: string; sceneId?: string;
+  }): RevealMilestone {
+    const id = `wrm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_reveal_milestones (id, reveal_plan_id, kind, chapter_id, scene_id, description) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, input.revealPlanId, input.kind, input.chapterId ?? null, input.sceneId ?? null, input.description);
+    return this.db.prepare('SELECT * FROM writing_reveal_milestones WHERE id = ?').get(id) as RevealMilestone;
+  }
+
+  listRevealMilestones(revealPlanId: string): RevealMilestone[] {
+    return this.db.prepare('SELECT * FROM writing_reveal_milestones WHERE reveal_plan_id = ?').all(revealPlanId) as RevealMilestone[];
   }
 }

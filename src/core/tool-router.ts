@@ -475,6 +475,22 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         required: ['subject_ref', 'state', 'narrative_position_type', 'narrative_position_id'],
       },
     },
+
+    // Tool 22: create_reveal_plan（Phase 11：揭示计划）
+    create_reveal_plan: {
+      name: 'create_reveal_plan',
+      description: '创建揭示计划。设定某个真相何时让读者知道，关联线索/章节/场景。',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: '揭示计划标签' },
+          subject_description: { type: 'string', description: '揭示内容描述' },
+          linked_thread_id: { type: 'string', description: '关联的线索 ID（可选）' },
+          target_reader_effect: { type: 'string', description: '目标读者反应' },
+        },
+        required: ['label', 'subject_description'],
+      },
+    },
   };
 }
 
@@ -627,6 +643,7 @@ export class ToolRouter {
         case 'create_foreshadowing_plan': return await this.handleCreateForeshadowingPlan(params);
         case 'get_foreshadowing_plans':  return await this.handleGetForeshadowingPlans(params);
         case 'create_reader_knowledge_state': return await this.handleCreateReaderKnowledgeState(params);
+        case 'create_reveal_plan':         return await this.handleCreateRevealPlan(params);
         default:
           return this.error(ToolErrorCode.UNKNOWN_TOOL, `未知工具: ${toolName}`, false, `可用工具: ${this.toolNames().join(', ')}`);
       }
@@ -675,7 +692,7 @@ export class ToolRouter {
       'detect_relation_hints', 'get_graph_view',
       'detect_spatial_nodes', 'get_spatial_view',
       'create_chapter_plan', 'create_scene_plan', 'get_timeline_view',
-      'create_foreshadowing_plan', 'get_foreshadowing_plans', 'create_reader_knowledge_state',
+      'create_foreshadowing_plan', 'get_foreshadowing_plans', 'create_reader_knowledge_state', 'create_reveal_plan',
     ];
   }
 
@@ -1507,6 +1524,23 @@ export class ToolRouter {
       narrativePositionType: posType, narrativePositionId: posId,
     });
     return this.ok({ id: ks.id, subjectRef: ks.subjectRef, state: ks.state });
+  }
+
+  private async handleCreateRevealPlan(params: Record<string, unknown>) {
+    if (!this.foreshadowingService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '伏笔服务未配置', false);
+    }
+    const label = typeof params['label'] === 'string' ? params['label'] : '';
+    const subjectDescription = typeof params['subject_description'] === 'string' ? params['subject_description'] : '';
+    if (!label || !subjectDescription) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'label/subject_description 必填', false);
+
+    const ctx = this.makeToolContext('reveal');
+    const plan = this.foreshadowingService.createRevealPlan(ctx, {
+      label, subjectDescription,
+      linkedThreadId: typeof params['linked_thread_id'] === 'string' ? params['linked_thread_id'] : undefined,
+      targetReaderEffect: typeof params['target_reader_effect'] === 'string' ? params['target_reader_effect'] : undefined,
+    });
+    return this.ok({ id: plan.id, label: plan.label, status: plan.status });
   }
 
   // =========================================================================

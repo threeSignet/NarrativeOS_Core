@@ -230,7 +230,7 @@ describe('Phase 8 · Agent 工具（detect_relation_hints + get_graph_view）', 
       const names = toolRouter.toolNames();
       expect(names).toContain('detect_relation_hints');
       expect(names).toContain('get_graph_view');
-      expect(names.length).toBe(21);
+      expect(names.length).toBe(22);
     });
 
     it('getDefinitions 包含两个新工具的 schema', () => {
