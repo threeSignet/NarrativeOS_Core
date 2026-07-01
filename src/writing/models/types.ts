@@ -894,3 +894,128 @@ export interface TimelineFilter {
   entityIds?: string[];
   chapterRange?: { from: number; to: number };
 }
+
+// =============================================================================
+// Phase 11：读者模型 / 伏笔与悬念（Feature-Spec §16-§17）
+// =============================================================================
+
+/** 读者群体类型 */
+export type ReaderAudienceKind = 'target_reader' | 'reread_reader' | 'author_view' | 'custom';
+
+/**
+ * 读者群体配置
+ * Feature-Spec §16.1
+ */
+export interface ReaderAudienceProfile {
+  id: string;
+  projectId: string;
+  label: string;
+  kind: ReaderAudienceKind;
+  enabled: boolean;
+  notes?: string;
+}
+
+/** 读者认知状态 */
+export type ReaderKnowledgeStateValue =
+  | 'unknown' | 'hinted' | 'suspected' | 'known'
+  | 'misled' | 'revealed' | 'forgotten_risk';
+
+/**
+ * 读者当前认知——记录读者在某个叙述位置知道/怀疑/误解/期待什么
+ * Feature-Spec §16.2
+ */
+export interface ReaderKnowledgeState {
+  id: string;
+  audienceId: string;
+  /** 叙述位置引用（章节/场景/正文锚点） */
+  narrativePositionRef: WritingObjectRef;
+  /** 信息主体引用（实体ID/事实描述等） */
+  subjectRef: string;
+  state: ReaderKnowledgeStateValue;
+  /** 置信度 0-1 */
+  confidence: number;
+  sourceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 伏笔类型 */
+export type ForeshadowingKind =
+  | 'clue' | 'suspense' | 'misdirection' | 'red_herring'
+  | 'theme_echo' | 'world_rule_hint';
+
+/** 伏笔计划状态 */
+export type ForeshadowingPlanStatus =
+  | 'planned' | 'active' | 'payoff_planned' | 'paid_off' | 'abandoned' | 'archived';
+
+/**
+ * 伏笔计划——作者如何铺设、提示、强化、误导、回收某个线索
+ * Feature-Spec §17.1
+ */
+export interface ForeshadowingPlan {
+  id: string;
+  projectId: string;
+  label: string;
+  kind: ForeshadowingKind;
+  targetReaderEffect: string;
+  linkedEntityRefs: string[];
+  linkedThreadId?: string;
+  revealPlanId?: string;
+  status: ForeshadowingPlanStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/** 暗示强度 */
+export type HintIntensity = 'subtle' | 'moderate' | 'obvious';
+
+/** 暗示可见性 */
+export type HintVisibility = 'reader_visible' | 'author_only' | 'character_visible';
+
+/** 暗示状态 */
+export type HintOccurrenceStatus = 'planned' | 'written' | 'needs_review' | 'removed';
+
+/**
+ * 暗示节点——伏笔在正文/场景/章节中的铺设位置
+ * Feature-Spec §17.2
+ */
+export interface HintOccurrence {
+  id: string;
+  foreshadowingPlanId: string;
+  /** 正文锚点（段落/句子位置） */
+  anchor?: { paragraphIndex: number; sentenceIndex?: number; excerpt?: string };
+  chapterId?: string;
+  sceneId?: string;
+  intensity: HintIntensity;
+  visibility: HintVisibility;
+  status: HintOccurrenceStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 回收方式 */
+export type PayoffKind =
+  | 'truth_reveal' | 'reversal' | 'misdirection_resolved'
+  | 'rule_confirmed' | 'emotional_echo';
+
+/** 回收计划状态 */
+export type PayoffPlanStatus = 'planned' | 'executing' | 'done' | 'abandoned';
+
+/**
+ * 回收计划——伏笔何时/如何被读者理解或被故事正式解决
+ * Feature-Spec §17.3
+ */
+export interface PayoffPlan {
+  id: string;
+  foreshadowingPlanId: string;
+  revealPlanId?: string;
+  kind: PayoffKind;
+  targetChapterId?: string;
+  targetSceneId?: string;
+  status: PayoffPlanStatus;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}

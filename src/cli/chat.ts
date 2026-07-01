@@ -196,11 +196,18 @@ const chapterService = new ChapterService(writingStore, auditService);
 const sceneService = new SceneService(writingStore, auditService);
 const timelineService = new TimelineService(writingStore);
 
+// Phase 11：读者/伏笔服务
+const { ReaderService } = await import('../writing/services/reader-service.js');
+const { ForeshadowingService } = await import('../writing/services/foreshadowing-service.js');
+const readerService = new ReaderService(writingStore, auditService);
+const foreshadowingService = new ForeshadowingService(writingStore, auditService);
+
 // 延迟注入实体检测服务到 ToolRouter（detect_entity_hints 工具需要；entityService/writingProjectId 此时就绪）
 toolRouter.setEntityService(entityService, writingProjectId);
 toolRouter.setGraphServices(relationService, graphService, writingProjectId);
 toolRouter.setSpatialServices(spatialService, spatialViewService, writingProjectId);
 toolRouter.setChapterSceneServices(chapterService, sceneService, timelineService, writingProjectId);
+toolRouter.setReaderForeshadowingServices(readerService, foreshadowingService, writingProjectId);
 
 // Agent
 const llm = new DeepSeekLLMClientAdapter();

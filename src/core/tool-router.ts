@@ -436,6 +436,45 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         },
       },
     },
+    // Tool 19: create_foreshadowing_plan（Phase 11：伏笔计划）
+    create_foreshadowing_plan: {
+      name: 'create_foreshadowing_plan',
+      description: '创建伏笔计划。设定伏笔类型、目标读者反应、关联实体。',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: '伏笔标签' },
+          kind: { type: 'string', enum: ['clue', 'suspense', 'misdirection', 'red_herring', 'theme_echo', 'world_rule_hint'], description: '伏笔类型' },
+          target_reader_effect: { type: 'string', description: '目标读者反应描述' },
+          linked_entity_refs: { type: 'array', items: { type: 'string' }, description: '关联实体 ID 列表' },
+        },
+        required: ['label', 'kind', 'target_reader_effect'],
+      },
+    },
+
+    // Tool 20: get_foreshadowing_plans（Phase 11：伏笔查询）
+    get_foreshadowing_plans: {
+      name: 'get_foreshadowing_plans',
+      description: '查询当前项目所有伏笔计划。',
+      parameters: { type: 'object', properties: {} },
+    },
+
+    // Tool 21: create_reader_knowledge_state（Phase 11：读者认知）
+    create_reader_knowledge_state: {
+      name: 'create_reader_knowledge_state',
+      description: '记录读者在某个叙述位置的认知状态（已知/怀疑/误解/揭示等）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          subject_ref: { type: 'string', description: '信息主体（实体ID或描述）' },
+          state: { type: 'string', enum: ['unknown', 'hinted', 'suspected', 'known', 'misled', 'revealed', 'forgotten_risk'], description: '读者认知状态' },
+          confidence: { type: 'number', description: '置信度 0-1' },
+          narrative_position_type: { type: 'string', description: '叙述位置类型（chapter/scene）' },
+          narrative_position_id: { type: 'string', description: '叙述位置 ID' },
+        },
+        required: ['subject_ref', 'state', 'narrative_position_type', 'narrative_position_id'],
+      },
+    },
   };
 }
 
@@ -481,6 +520,11 @@ export class ToolRouter {
   private sceneService: any | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private timelineService: any | undefined;
+  // Phase 11：读者/伏笔服务
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private readerService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private foreshadowingService: any | undefined;
 
   /** 延迟注入写作层实体检测服务（chat.ts 在 entityService 创建后调用） */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -511,6 +555,14 @@ export class ToolRouter {
     this.chapterService = chapterService;
     this.sceneService = sceneService;
     this.timelineService = timelineService;
+    this.writingProjectId = writingProjectId;
+  }
+
+  /** 延迟注入写作层读者/伏笔服务 */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setReaderForeshadowingServices(readerService: any, foreshadowingService: any, writingProjectId: string): void {
+    this.readerService = readerService;
+    this.foreshadowingService = foreshadowingService;
     this.writingProjectId = writingProjectId;
   }
   // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
@@ -572,6 +624,9 @@ export class ToolRouter {
         case 'create_chapter_plan':     return await this.handleCreateChapterPlan(params);
         case 'create_scene_plan':       return await this.handleCreateScenePlan(params);
         case 'get_timeline_view':       return await this.handleGetTimelineView(params);
+        case 'create_foreshadowing_plan': return await this.handleCreateForeshadowingPlan(params);
+        case 'get_foreshadowing_plans':  return await this.handleGetForeshadowingPlans(params);
+        case 'create_reader_knowledge_state': return await this.handleCreateReaderKnowledgeState(params);
         default:
           return this.error(ToolErrorCode.UNKNOWN_TOOL, `未知工具: ${toolName}`, false, `可用工具: ${this.toolNames().join(', ')}`);
       }
@@ -620,6 +675,7 @@ export class ToolRouter {
       'detect_relation_hints', 'get_graph_view',
       'detect_spatial_nodes', 'get_spatial_view',
       'create_chapter_plan', 'create_scene_plan', 'get_timeline_view',
+      'create_foreshadowing_plan', 'get_foreshadowing_plans', 'create_reader_knowledge_state',
     ];
   }
 
@@ -1397,6 +1453,60 @@ export class ToolRouter {
       mode,
       markdown: lines.join('\n'),
     });
+  }
+
+  // =========================================================================
+  // Tool 19-21: Phase 11 伏笔/读者工具
+  // =========================================================================
+
+  private async handleCreateForeshadowingPlan(params: Record<string, unknown>) {
+    if (!this.foreshadowingService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '伏笔服务未配置', false);
+    }
+    const label = typeof params['label'] === 'string' ? params['label'] : '';
+    const kind = typeof params['kind'] === 'string' ? params['kind'] : '';
+    const targetReaderEffect = typeof params['target_reader_effect'] === 'string' ? params['target_reader_effect'] : '';
+    if (!label || !kind || !targetReaderEffect) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'label/kind/target_reader_effect 必填', false);
+
+    const ctx = this.makeToolContext('foreshadowing');
+    const plan = this.foreshadowingService.createForeshadowingPlan(ctx, {
+      label, kind: kind as any, targetReaderEffect,
+      linkedEntityRefs: Array.isArray(params['linked_entity_refs']) ? params['linked_entity_refs'] as string[] : undefined,
+    });
+    return this.ok({ id: plan.id, label: plan.label, kind: plan.kind, status: plan.status });
+  }
+
+  private async handleGetForeshadowingPlans(_params: Record<string, unknown>) {
+    if (!this.foreshadowingService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '伏笔服务未配置', false);
+    }
+    const store = (this as any).store as { listForeshadowingPlans: (pid: string) => any[] };
+    const plans = store?.listForeshadowingPlans(this.writingProjectId) ?? [];
+    const lines = [`## 伏笔计划（${plans.length} 个）\n`];
+    for (const p of plans) {
+      lines.push(`- [${p.status}] ${p.label} (${p.kind})`);
+    }
+    return this.ok({ count: plans.length, markdown: lines.join('\n') });
+  }
+
+  private async handleCreateReaderKnowledgeState(params: Record<string, unknown>) {
+    if (!this.readerService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '读者服务未配置', false);
+    }
+    const subjectRef = typeof params['subject_ref'] === 'string' ? params['subject_ref'] : '';
+    const state = typeof params['state'] === 'string' ? params['state'] : '';
+    const posType = typeof params['narrative_position_type'] === 'string' ? params['narrative_position_type'] : '';
+    const posId = typeof params['narrative_position_id'] === 'string' ? params['narrative_position_id'] : '';
+    if (!subjectRef || !state || !posType || !posId) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'subject_ref/state/narrative_position_type/narrative_position_id 必填', false);
+
+    const ctx = this.makeToolContext('reader');
+    const audience = this.readerService.getOrCreateDefaultAudience(ctx);
+    const ks = this.readerService.createKnowledgeState(ctx, {
+      audienceId: audience.id, subjectRef, state: state as any,
+      confidence: typeof params['confidence'] === 'number' ? params['confidence'] : undefined,
+      narrativePositionType: posType, narrativePositionId: posId,
+    });
+    return this.ok({ id: ks.id, subjectRef: ks.subjectRef, state: ks.state });
   }
 
   // =========================================================================

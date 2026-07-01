@@ -50,6 +50,11 @@ import type {
   SpatialView,
   ChapterPlan, ChapterPlanStatus,
   ScenePlan, ScenePlanStatus, ScenePurpose,
+  ReaderAudienceProfile, ReaderAudienceKind,
+  ReaderKnowledgeState, ReaderKnowledgeStateValue,
+  ForeshadowingPlan, ForeshadowingPlanStatus, ForeshadowingKind,
+  HintOccurrence, HintIntensity, HintVisibility, HintOccurrenceStatus,
+  PayoffPlan, PayoffPlanStatus, PayoffKind,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
@@ -522,6 +527,88 @@ CREATE TABLE IF NOT EXISTS writing_scene_plans (
   FOREIGN KEY (chapter_id) REFERENCES writing_chapter_plans(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wsplan_chapter ON writing_scene_plans(chapter_id, status);
+
+-- W.22 writing_reader_audiences：读者群体配置（Phase 11）
+CREATE TABLE IF NOT EXISTS writing_reader_audiences (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'target_reader',
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  notes       TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at  TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wra_project ON writing_reader_audiences(project_id);
+
+-- W.23 writing_reader_knowledge_states：读者认知状态（Phase 11）
+CREATE TABLE IF NOT EXISTS writing_reader_knowledge_states (
+  id               TEXT PRIMARY KEY,
+  audience_id      TEXT NOT NULL,
+  narrative_position_type TEXT NOT NULL,
+  narrative_position_id   TEXT NOT NULL,
+  subject_ref      TEXT NOT NULL,
+  state            TEXT NOT NULL DEFAULT 'unknown',
+  confidence       REAL NOT NULL DEFAULT 0.5,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (audience_id) REFERENCES writing_reader_audiences(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wrks_audience ON writing_reader_knowledge_states(audience_id);
+
+-- W.24 writing_foreshadowing_plans：伏笔计划（Phase 11）
+CREATE TABLE IF NOT EXISTS writing_foreshadowing_plans (
+  id                    TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  label                 TEXT NOT NULL,
+  kind                  TEXT NOT NULL,
+  target_reader_effect  TEXT NOT NULL DEFAULT '',
+  linked_entity_refs_json TEXT NOT NULL DEFAULT '[]',
+  linked_thread_id      TEXT,
+  reveal_plan_id        TEXT,
+  status                TEXT NOT NULL DEFAULT 'planned',
+  version               INTEGER NOT NULL DEFAULT 1,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at            TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wfp_project ON writing_foreshadowing_plans(project_id, status);
+
+-- W.25 writing_hint_occurrences：暗示节点（Phase 11）
+CREATE TABLE IF NOT EXISTS writing_hint_occurrences (
+  id                    TEXT PRIMARY KEY,
+  foreshadowing_plan_id TEXT NOT NULL,
+  anchor_json           TEXT,
+  chapter_id            TEXT,
+  scene_id              TEXT,
+  intensity             TEXT NOT NULL DEFAULT 'moderate',
+  visibility            TEXT NOT NULL DEFAULT 'reader_visible',
+  status                TEXT NOT NULL DEFAULT 'planned',
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (foreshadowing_plan_id) REFERENCES writing_foreshadowing_plans(id)
+);
+CREATE INDEX IF NOT EXISTS idx_who_plan ON writing_hint_occurrences(foreshadowing_plan_id);
+
+-- W.26 writing_payoff_plans：回收计划（Phase 11）
+CREATE TABLE IF NOT EXISTS writing_payoff_plans (
+  id                    TEXT PRIMARY KEY,
+  foreshadowing_plan_id TEXT NOT NULL,
+  reveal_plan_id        TEXT,
+  kind                  TEXT NOT NULL,
+  target_chapter_id     TEXT,
+  target_scene_id       TEXT,
+  status                TEXT NOT NULL DEFAULT 'planned',
+  notes                 TEXT,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (foreshadowing_plan_id) REFERENCES writing_foreshadowing_plans(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpp_plan ON writing_payoff_plans(foreshadowing_plan_id);
 `;
 
 // =============================================================================
@@ -1170,6 +1257,9 @@ export class SQLiteWritingStore {
       // Phase 10（W.20/W.21）：章节规划/场景规划，生命周期跟随项目。
       'writing_chapter_plans',
       'writing_scene_plans',
+      // Phase 11（W.22-W.26）：读者模型/伏笔/暗示/回收，生命周期跟随项目。
+      'writing_reader_audiences',
+      'writing_foreshadowing_plans',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -2776,5 +2866,126 @@ export class SQLiteWritingStore {
       createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
       deletedAt: (row['deleted_at'] as string) ?? undefined,
     };
+  }
+
+  // ===========================================================================
+  // Phase 11：读者群体 CRUD（W.22）
+  // ===========================================================================
+
+  createReaderAudience(projectId: string, input: {
+    label: string; kind: ReaderAudienceKind; notes?: string;
+  }): ReaderAudienceProfile {
+    const id = `wra_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_reader_audiences (id, project_id, label, kind, notes) VALUES (?, ?, ?, ?, ?)`
+    ).run(id, projectId, input.label, input.kind, input.notes ?? null);
+    return this.db.prepare('SELECT * FROM writing_reader_audiences WHERE id = ?').get(id) as ReaderAudienceProfile;
+  }
+
+  listReaderAudiences(projectId: string): ReaderAudienceProfile[] {
+    return this.db.prepare('SELECT * FROM writing_reader_audiences WHERE project_id = ?').all(projectId) as ReaderAudienceProfile[];
+  }
+
+  // ===========================================================================
+  // Phase 11：读者认知状态 CRUD（W.23）
+  // ===========================================================================
+
+  createReaderKnowledgeState(input: {
+    audienceId: string; subjectRef: string;
+    state: ReaderKnowledgeStateValue; confidence?: number;
+    narrativePositionType: string; narrativePositionId: string;
+    sourceRefs?: string[];
+  }): ReaderKnowledgeState {
+    const id = `wrks_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_reader_knowledge_states (id, audience_id, narrative_position_type, narrative_position_id, subject_ref, state, confidence, source_refs_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, input.audienceId, input.narrativePositionType, input.narrativePositionId, input.subjectRef, input.state, input.confidence ?? 0.5, JSON.stringify(input.sourceRefs ?? []));
+    return this.db.prepare('SELECT * FROM writing_reader_knowledge_states WHERE id = ?').get(id) as ReaderKnowledgeState;
+  }
+
+  listReaderKnowledgeStates(audienceId: string): ReaderKnowledgeState[] {
+    return this.db.prepare('SELECT * FROM writing_reader_knowledge_states WHERE audience_id = ?').all(audienceId) as ReaderKnowledgeState[];
+  }
+
+  updateReaderKnowledgeState(id: string, updates: { state: ReaderKnowledgeStateValue; confidence?: number; sourceRefs?: string[] }): void {
+    const parts: string[] = ['state = ?']; const vals: unknown[] = [updates.state];
+    if (updates.confidence !== undefined) { parts.push('confidence = ?'); vals.push(updates.confidence); }
+    if (updates.sourceRefs !== undefined) { parts.push('source_refs_json = ?'); vals.push(JSON.stringify(updates.sourceRefs)); }
+    parts.push("updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_reader_knowledge_states SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  // ===========================================================================
+  // Phase 11：伏笔计划 CRUD（W.24）
+  // ===========================================================================
+
+  createForeshadowingPlan(projectId: string, input: {
+    label: string; kind: ForeshadowingKind; targetReaderEffect: string;
+    linkedEntityRefs?: string[]; linkedThreadId?: string;
+  }): ForeshadowingPlan {
+    const id = `wfp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_foreshadowing_plans (id, project_id, label, kind, target_reader_effect, linked_entity_refs_json, linked_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, projectId, input.label, input.kind, input.targetReaderEffect, JSON.stringify(input.linkedEntityRefs ?? []), input.linkedThreadId ?? null);
+    return this.db.prepare('SELECT * FROM writing_foreshadowing_plans WHERE id = ?').get(id) as ForeshadowingPlan;
+  }
+
+  getForeshadowingPlan(id: string): ForeshadowingPlan | undefined {
+    return this.db.prepare('SELECT * FROM writing_foreshadowing_plans WHERE id = ? AND deleted_at IS NULL').get(id) as ForeshadowingPlan | undefined;
+  }
+
+  listForeshadowingPlans(projectId: string): ForeshadowingPlan[] {
+    return this.db.prepare('SELECT * FROM writing_foreshadowing_plans WHERE project_id = ? AND deleted_at IS NULL').all(projectId) as ForeshadowingPlan[];
+  }
+
+  updateForeshadowingPlan(id: string, updates: Partial<{ status: ForeshadowingPlanStatus; revealPlanId: string; linkedThreadId: string }>): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.status !== undefined) { parts.push('status = ?'); vals.push(updates.status); }
+    if (updates.revealPlanId !== undefined) { parts.push('reveal_plan_id = ?'); vals.push(updates.revealPlanId); }
+    if (updates.linkedThreadId !== undefined) { parts.push('linked_thread_id = ?'); vals.push(updates.linkedThreadId); }
+    if (parts.length === 0) return;
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_foreshadowing_plans SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  // ===========================================================================
+  // Phase 11：暗示节点 CRUD（W.25）
+  // ===========================================================================
+
+  createHintOccurrence(input: {
+    foreshadowingPlanId: string; chapterId?: string; sceneId?: string;
+    intensity: HintIntensity; visibility: HintVisibility;
+    anchor?: { paragraphIndex: number; sentenceIndex?: number; excerpt?: string };
+  }): HintOccurrence {
+    const id = `who_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_hint_occurrences (id, foreshadowing_plan_id, anchor_json, chapter_id, scene_id, intensity, visibility) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, input.foreshadowingPlanId, input.anchor ? JSON.stringify(input.anchor) : null, input.chapterId ?? null, input.sceneId ?? null, input.intensity, input.visibility);
+    return this.db.prepare('SELECT * FROM writing_hint_occurrences WHERE id = ?').get(id) as HintOccurrence;
+  }
+
+  listHintOccurrences(foreshadowingPlanId: string): HintOccurrence[] {
+    return this.db.prepare('SELECT * FROM writing_hint_occurrences WHERE foreshadowing_plan_id = ?').all(foreshadowingPlanId) as HintOccurrence[];
+  }
+
+  // ===========================================================================
+  // Phase 11：回收计划 CRUD（W.26）
+  // ===========================================================================
+
+  createPayoffPlan(input: {
+    foreshadowingPlanId: string; kind: PayoffKind;
+    targetChapterId?: string; targetSceneId?: string; notes?: string;
+  }): PayoffPlan {
+    const id = `wpp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_payoff_plans (id, foreshadowing_plan_id, kind, target_chapter_id, target_scene_id, notes) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, input.foreshadowingPlanId, input.kind, input.targetChapterId ?? null, input.targetSceneId ?? null, input.notes ?? null);
+    return this.db.prepare('SELECT * FROM writing_payoff_plans WHERE id = ?').get(id) as PayoffPlan;
+  }
+
+  listPayoffPlans(foreshadowingPlanId: string): PayoffPlan[] {
+    return this.db.prepare('SELECT * FROM writing_payoff_plans WHERE foreshadowing_plan_id = ?').all(foreshadowingPlanId) as PayoffPlan[];
   }
 }

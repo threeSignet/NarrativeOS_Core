@@ -1,0 +1,99 @@
+// =============================================================================
+// Phase 11 测试：ForeshadowingService + ReaderService
+// =============================================================================
+
+import { describe, it, expect, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { SQLiteWritingStore } from '../../src/writing/repositories/writing-store.js';
+import { AuditService } from '../../src/writing/services/audit-service.js';
+import { ForeshadowingService } from '../../src/writing/services/foreshadowing-service.js';
+import { ReaderService } from '../../src/writing/services/reader-service.js';
+import { makeRequestContext } from '../../src/writing/services/context.js';
+import type { WritingRequestContext } from '../../src/writing/services/context.js';
+
+describe('Phase 11 · ForeshadowingService', () => {
+  let store: SQLiteWritingStore;
+  let service: ForeshadowingService;
+  let ctx: WritingRequestContext;
+  let projectId: string;
+
+  beforeEach(() => {
+    const db = new Database(':memory:');
+    store = new SQLiteWritingStore(db);
+    store.createTables();
+    service = new ForeshadowingService(store, new AuditService(store));
+    projectId = store.createProject('伏笔测试').id;
+    ctx = makeRequestContext({ projectId, trigger: 'author_action' });
+  });
+
+  it('创建伏笔计划', () => {
+    const plan = service.createForeshadowingPlan(ctx, { label: '诛仙剑秘密', kind: 'clue', targetReaderEffect: '好奇来源' });
+    expect(plan.id).toMatch(/^wfp_/);
+    expect(plan.label).toBe('诛仙剑秘密');
+    expect(plan.kind).toBe('clue');
+    expect(plan.status).toBe('planned');
+  });
+
+  it('更新伏笔状态', () => {
+    const plan = service.createForeshadowingPlan(ctx, { label: 'A', kind: 'suspense', targetReaderEffect: '紧张' });
+    service.updateForeshadowingPlanStatus(ctx, plan.id, 'active');
+    expect(store.getForeshadowingPlan(plan.id)!.status).toBe('active');
+  });
+
+  it('创建暗示节点', () => {
+    const plan = service.createForeshadowingPlan(ctx, { label: 'A', kind: 'clue', targetReaderEffect: '好奇' });
+    const hint = service.createHintOccurrence(ctx, { foreshadowingPlanId: plan.id, intensity: 'subtle', visibility: 'reader_visible', chapterId: 'ch_1' });
+    expect(hint.id).toMatch(/^who_/);
+    expect(hint.intensity).toBe('subtle');
+  });
+
+  it('创建回收计划', () => {
+    const plan = service.createForeshadowingPlan(ctx, { label: 'A', kind: 'clue', targetReaderEffect: '好奇' });
+    const payoff = service.createPayoffPlan(ctx, { foreshadowingPlanId: plan.id, kind: 'truth_reveal', targetChapterId: 'ch_5' });
+    expect(payoff.id).toMatch(/^wpp_/);
+    expect(payoff.kind).toBe('truth_reveal');
+  });
+});
+
+describe('Phase 11 · ReaderService', () => {
+  let store: SQLiteWritingStore;
+  let service: ReaderService;
+  let ctx: WritingRequestContext;
+  let projectId: string;
+
+  beforeEach(() => {
+    const db = new Database(':memory:');
+    store = new SQLiteWritingStore(db);
+    store.createTables();
+    service = new ReaderService(store, new AuditService(store));
+    projectId = store.createProject('读者测试').id;
+    ctx = makeRequestContext({ projectId, trigger: 'author_action' });
+  });
+
+  it('创建读者群体', () => {
+    const audience = service.createAudience(ctx, { label: '目标读者', kind: 'target_reader' });
+    expect(audience.id).toMatch(/^wra_/);
+    expect(audience.kind).toBe('target_reader');
+  });
+
+  it('获取或创建默认读者', () => {
+    const first = service.getOrCreateDefaultAudience(ctx);
+    const second = service.getOrCreateDefaultAudience(ctx);
+    expect(first.id).toBe(second.id);
+  });
+
+  it('创建读者认知状态', () => {
+    const audience = service.createAudience(ctx, { label: '测试', kind: 'target_reader' });
+    const ks = service.createKnowledgeState(ctx, { audienceId: audience.id, subjectRef: 'ent_zhangsan', state: 'known', narrativePositionType: 'chapter', narrativePositionId: 'ch_1' });
+    expect(ks.id).toMatch(/^wrks_/);
+    expect(ks.state).toBe('known');
+  });
+
+  it('更新读者认知状态', () => {
+    const audience = service.createAudience(ctx, { label: '测试', kind: 'target_reader' });
+    const ks = service.createKnowledgeState(ctx, { audienceId: audience.id, subjectRef: 'ent_zhangsan', state: 'hinted', narrativePositionType: 'chapter', narrativePositionId: 'ch_1' });
+    service.updateKnowledgeState(ctx, ks.id, 'revealed', 0.9);
+    const states = store.listReaderKnowledgeStates(audience.id);
+    expect(states[0]!.state).toBe('revealed');
+  });
+});
