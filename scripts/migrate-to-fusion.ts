@@ -14,13 +14,14 @@
 
 import Database from 'better-sqlite3';
 import { existsSync, mkdirSync, copyFileSync, renameSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { getAppRegistry, type AppRegistry } from '../src/session/app-registry.js';
 import type { AppProjectRecord } from '../src/session/app-registry.js';
 // 用 writing store 的 DDL 幂等补建缺失表（旧库可能缺 Phase 12 的 writing_documents 等）
 import { SQLiteWritingStore } from '../src/writing/repositories/writing-store.js';
 
-const DATA_DIR = './data';
+// dataDir 用绝对路径：app.db 存的 dbPath 必须绝对，避免 CLI/BFF 不同 CWD 解析到不同文件
+const DATA_DIR = resolve('./data');
 const PROJECTS_DIR = join(DATA_DIR, 'projects');
 
 /** coreProjectId 派生（与 project-manager.ts 一致） */

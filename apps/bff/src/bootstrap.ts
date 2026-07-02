@@ -13,6 +13,14 @@
 import { getProjectManager } from '../../../src/session/project-manager.js';
 import type { ProjectSession } from '../../../src/session/project-session.js';
 import type { WritingRequestContext, WritingTrigger } from '../../../src/writing/services/context.js';
+import { resolve } from 'node:path';
+
+/**
+ * 项目根的 data 目录（绝对路径）。
+ * 关键：app.db 与项目数据必须在项目根的 data/，无论 BFF 从哪个 CWD 启动。
+ * apps/bff/ 上两级即项目根。允许 DATA_DIR 环境变量覆盖。
+ */
+const PROJECT_DATA_DIR = resolve(process.env.DATA_DIR ?? '../../data');
 
 export interface BffServices {
   /** ProjectManager（app.db 注册表，供路由列项目/建项目） */
@@ -35,7 +43,7 @@ export interface BffServices {
  * - 无项目：建默认项目"我的作品"
  */
 export async function bootstrap(): Promise<BffServices> {
-  const manager = getProjectManager('./data');
+  const manager = getProjectManager(PROJECT_DATA_DIR);
   let records = manager.listProjects();
 
   // 无项目则建默认

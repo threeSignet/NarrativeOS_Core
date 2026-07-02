@@ -55,12 +55,16 @@ export interface OpenProjectOptions {
 
 export class ProjectManager {
   readonly dataDir: string;
-  private registry = getAppRegistry();
+  private registry: ReturnType<typeof getAppRegistry>;
   /** 已打开的 session 缓存（name → session），避免重复打开 */
   private sessions = new Map<string, ProjectSession>();
 
   constructor(dataDir?: string) {
     this.dataDir = resolve(dataDir ?? './data');
+    // app.db 固定在 dataDir 根下（与项目目录 dataDir/projects/ 同级）。
+    // 关键：用 dataDir 派生 app.db 路径，使 CLI/BFF/迁移脚本指向同一个 app.db，
+    // 不受各自 CWD 影响（此前 BFF 从 apps/bff/ 启动解析到错误的 app.db）。
+    this.registry = getAppRegistry(join(this.dataDir, 'app.db'));
   }
 
   /** 项目目录：dataDir/projects/<name>/ */
@@ -165,8 +169,12 @@ export class ProjectManager {
     if (cached2) return cached2;
 
     // 装配 ProjectSession（用注册表的 coreProjectId / writingProjectId）
+    // dbPath/vectorsPath 兼容相对路径：相对 dataDir 解析为绝对路径，
+    // 避免不同 CWD（CLI 项目根 vs BFF apps/bff/）解析到不同文件。
+    const absDbPath = resolve(this.dataDir, record.dbPath);
+    const absVectorsPath = resolve(this.dataDir, record.vectorsPath);
     const session = new ProjectSession({
-      dbPath: record.dbPath,
+      dbPath: absDbPath,
       coreProjectId: record.coreProjectId,
       writingProjectId: record.id,
       withAgent: false,
@@ -174,7 +182,7 @@ export class ProjectManager {
 
     // 按需异步装配向量 / agent
     if (opts?.withVector) {
-      await session.initVector(opts.vectorsPath ?? record.vectorsPath);
+      await session.initVector(opts.vectorsPath ?? absVectorsPath);
     }
     if (opts?.withAgent) {
       await session.initAgent();
