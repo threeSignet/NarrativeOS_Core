@@ -14,10 +14,7 @@
 // =============================================================================
 
 import * as readline from 'readline';
-import Database from 'better-sqlite3';
 import { config } from 'dotenv';
-import { mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
 // /review 渲染所需类型——静态 import type 编译期擦除，不引入运行时模块加载（与下方动态 import 共存）
 import type { WritingProposalView } from '../writing/models/types.js';
 // CLI 命令层（Phase 7 补齐）——handlers 纯函数 + 解析器，静态 import（无副作用）
@@ -51,244 +48,89 @@ console.log('═'.repeat(56));
 console.log('  📖 NarrativeOS · Phase 7 写作层 CLI');
 console.log('═'.repeat(56));
 
-// 1. 项目选择（交互式菜单 + 记住上次 + 旧库迁移）
+// 1. 项目选择（交互式菜单 + 记住上次；融合后基于 data/app.db 注册表）
 const selected = await selectProject('./data');
-const DATA_DIR = selected.dir;
-const DB_PATH = join(DATA_DIR, 'cli.db');
-const LANCEDB_DIR = join(DATA_DIR, 'lancedb');
 
 console.log(`  📂 项目: ${selected.name}`);
-console.log(`  💾 数据库: ${DB_PATH}`);
+console.log(`  💾 项目库: data/projects/${selected.name}/project.db（融合架构）`);
 console.log('  输入 /help 查看命令  |  /quit 退出');
 console.log('─'.repeat(56));
 
-// 2. 确保目录存在
-mkdirSync(LANCEDB_DIR, { recursive: true });
-
-// 动态导入
-const { SQLiteFactStoreAdapter } = await import('../adapters/sqlite/fact-store.js');
-const { SQLiteKnowledgeStoreAdapter } = await import('../adapters/sqlite/knowledge-store.js');
-const { SQLiteEventStoreAdapter } = await import('../adapters/sqlite/event-store.js');
-const { SQLiteThreadStoreAdapter } = await import('../adapters/sqlite/thread-store.js');
-const { SQLiteAgentStoreAdapter } = await import('../adapters/sqlite/agent-store.js');
-const { SQLiteWritingStore } = await import('../writing/repositories/writing-store.js');
-const { DeepSeekLLMClientAdapter } = await import('../adapters/llm/deepseek-client.js');
-const { ProposalManager } = await import('../core/proposal-manager.js');
-const { RuleEngine } = await import('../core/rule-engine.js');
-const { ThreadResolver } = await import('../core/thread-resolver.js');
-const { ToolService } = await import('../core/tool-service.js');
-const { SchemaExtensionManager } = await import('../core/schema-extension-manager.js');
-const { ToolRouter } = await import('../core/tool-router.js');
-const { RetconEngine } = await import('../core/retcon-engine.js');
-const { NarrativeAgent } = await import('../agent/narrative-agent.js');
-const { RealCoreBridge } = await import('../writing/core-bridge/real-bridge.js');
-const { AuditService } = await import('../writing/services/audit-service.js');
-const { ProjectService } = await import('../writing/services/project-service.js');
-const { IdeaService } = await import('../writing/services/idea-service.js');
-const { BlueprintService } = await import('../writing/services/blueprint-service.js');
-const { DraftService } = await import('../writing/services/draft-service.js');
-const { EntityService } = await import('../writing/services/entity-service.js');
-const { WorkflowService } = await import('../writing/services/workflow-service.js');
+// 动态导入（装配已移至 src/session/，此处仅保留 CLI 命令层所需）
 const { makeRequestContext } = await import('../writing/services/context.js');
 // W11：错误模型渲染——写作层抛出的 WritingError / StateMachineError 经 ERROR_RECOVERY_MAP
 // 映射为作者可读文案（CLI 异常通道的唯一消费点）
 const { renderErrorForAuthor } = await import('../writing/errors/error-codes.js');
-// 向量检索管线（Push 语义注入 + LanceDB 同步）——Phase 7 闭环基础设施
-const { LanceDBTableAdapter } = await import('../adapters/lancedb/table-adapter.js');
-const { SiliconFlowEmbeddingService } = await import('../adapters/embedding/siliconflow-embedder.js');
-const { RelevantFactRetriever } = await import('../core/relevant-fact-retriever.js');
-const { FactRenderer } = await import('../core/fact-renderer.js');
-const { SyncQueueConsumer } = await import('../core/sync-queue-consumer.js');
 
 // ---- 初始化 ----
 process.stdout.write('🔧 初始化 Core + WritingLayer...');
 
-// Core projectId 用项目名（每项目独立 db 文件后，状态版本在该文件内天然隔离；
-// 此处传真实值让 Core 层不再依赖硬编码 'default'，双保险）
-const CORE_PROJECT_ID = selected.name;
-const factStore = new SQLiteFactStoreAdapter(DB_PATH, CORE_PROJECT_ID);
-const db = factStore.getDatabase();
-const knowledgeStore = new SQLiteKnowledgeStoreAdapter(db);
-const eventStore = new SQLiteEventStoreAdapter(db);
-const threadStore = new SQLiteThreadStoreAdapter(db);
+// 存储融合阶段5：装配改走 ProjectManager + ProjectSession（共享层），
+// 替代原内联的 FactStore/WritingStore/Service 群实例化。
+// CLI 与 BFF 现共用同一套装配代码（src/session/）。
+const { getProjectManager } = await import('../session/project-manager.js');
+const manager = getProjectManager('./data');
 
-const threadResolver = new ThreadResolver();
-const ruleEngine = new RuleEngine();
-const proposalManager = new ProposalManager(ruleEngine, undefined, threadStore, threadResolver);
-const retconEngine = new RetconEngine();
-const toolService = new ToolService(factStore, knowledgeStore, eventStore, threadStore, threadResolver);
-const schemaExtensionManager = new SchemaExtensionManager(db, CORE_PROJECT_ID);
-
-const toolRouter = new ToolRouter({
-  proposalManager, retconEngine, toolService,
-  schemaExtensionManager, factStore, knowledgeStore, eventStore, threadStore,
-});
-
-// 写作层
-const writingStore = new SQLiteWritingStore(db);
-writingStore.createTables();
-
-const auditService = new AuditService(writingStore);
-const workflowService = new WorkflowService(writingStore, auditService);
-// RealCoreBridge 注入 auditService：commit/register 内部落地审计（§7.7 4d/5b），
-// 保证「任何调用方提交都被审计」，而非依赖调用方各自记录。
-const coreBridge = new RealCoreBridge(toolRouter, writingStore, auditService);
-
-// W5 启动对账（§7.11.5 两阶段提交恢复）：修复"Core 已提交/注册但写作层状态未同步"的孤儿对象。
-// commit/register 回写整体失败（partial）时，对象停在提交前状态而 Core 已持久化对应 event/entity，
-// 启动时据审计日志回写恢复。无孤儿时为 no-op。
-const reconcileResult = coreBridge.reconcile();
-const recoveredProposals = reconcileResult.proposals.recovered.length;
-const recoveredEntities = reconcileResult.entities.recovered.length;
-if (recoveredProposals > 0 || recoveredEntities > 0) {
-  console.log(
-    `  🔧 启动对账恢复：${recoveredProposals} 个提案、${recoveredEntities} 个实体已从孤儿态恢复`,
-  );
-}
-
-const projectService = new ProjectService(writingStore, auditService);
-const draftService = new DraftService(writingStore, auditService, coreBridge, workflowService);
-const entityService = new EntityService(writingStore, auditService, workflowService);
-const blueprintService = new BlueprintService(writingStore, auditService);
-const ideaServiceInitial = new IdeaService(writingStore, auditService);
-
-// 查找已有项目或创建新项目（新建走 ProjectService 组合初始化：建蓝图+灵感+布局+偏好容器）
-let existingProject = writingStore.listProjects()[0];
+// 新建项目 → createProject（建目录 + 装配空库 + 建写作层项目 + 写 app.db 注册表）
+// 已有项目 → openProject（查 app.db → ProjectSession 打开 + 装配）
+const { ProjectSession: ProjectSessionType } = await import('../session/project-session.js');
+let session: InstanceType<typeof ProjectSessionType>;
 let writingProjectId: string;
-
-if (existingProject) {
-  writingProjectId = existingProject.id;
-  console.log(`\n  📂 写作层项目: ${existingProject.title} (${existingProject.id})`);
+if (selected.isNew) {
+  const result = manager.createProject({ name: selected.name, title: selected.name });
+  session = result.session;
+  writingProjectId = result.record.id;
+  console.log(`\n  🆕 写作层项目已创建: ${selected.name} (${writingProjectId})`);
 } else {
-  // 新 db 文件首次加载：用项目名建项目（走 ProjectService 完整初始化）
-  // 注：此处 ctx 用临时 sessionId（agent 尚未创建），仅用于 createProject 的审计记录
-  const bootstrapCtx = makeRequestContext({
-    projectId: 'pending', // createProject 内部会用新 id，此处占位
-    sessionId: `bootstrap-${Date.now()}`,
-    trigger: 'author_action',
-  });
-  const created = projectService.createProject(bootstrapCtx, {
-    title: selected.name,
-    premise: '',
-  });
-  writingProjectId = created.id;
-  console.log(`\n  🆕 写作层项目已创建: ${created.title} (${created.id})`);
+  // 装配向量检索（CLI 需要语义召回 + sync_queue 同步）
+  session = await manager.openProject(selected.name, { withVector: true, withAgent: false });
+  writingProjectId = session.writingProjectId!;
+  console.log(`\n  📂 写作层项目: ${selected.name} (${writingProjectId})`);
 }
 
-// 重新创建 IdeaService（需要 draftService，存在循环依赖）
-const ideaService = new IdeaService(writingStore, auditService, draftService.createDraft.bind(draftService));
+// 从 session 取出全部 store/service（与原内联实例化的对象等价）
+const factStore = session.factStore;
+const writingStore = session.writingStore;
+const auditService = session.auditService;
+const workflowService = session.workflowService;
+const coreBridge = session.coreBridge;
+const projectService = session.projectService;
+const draftService = session.draftService;
+const entityService = session.entityService;
+const blueprintService = session.blueprintService;
+const ideaService = session.ideaService;
+const relationService = session.relationService;
+const graphService = session.graphService;
+const spatialService = session.spatialService;
+const spatialViewService = session.spatialViewService;
+const chapterService = session.chapterService;
+const sceneService = session.sceneService;
+const timelineService = session.timelineService;
+const readerService = session.readerService;
+const foreshadowingService = session.foreshadowingService;
+const proseService = session.proseService;
+const styleService = session.styleService;
+const revisionService = session.revisionService;
+const retconViewService = session.retconViewService;
+const importExportService = session.importExportService;
+const documentService = session.documentService;
+const consumer = session.consumer;
 
-// Phase 8：关系与图谱服务
-const { RelationService } = await import('../writing/services/relation-service.js');
-const { GraphService } = await import('../writing/services/graph-service.js');
-const relationService = new RelationService(writingStore, auditService, workflowService, coreBridge);
-const graphService = new GraphService(writingStore, coreBridge);
-
-// Phase 9：空间服务
-const { SpatialService } = await import('../writing/services/spatial-service.js');
-const { SpatialViewService } = await import('../writing/services/spatial-view-service.js');
-const spatialService = new SpatialService(writingStore, auditService, workflowService, coreBridge);
-const spatialViewService = new SpatialViewService(writingStore);
-
-// Phase 10：章节/场景/时间线服务
-const { ChapterService } = await import('../writing/services/chapter-service.js');
-const { SceneService } = await import('../writing/services/scene-service.js');
-const { TimelineService } = await import('../writing/services/timeline-service.js');
-const chapterService = new ChapterService(writingStore, auditService);
-const sceneService = new SceneService(writingStore, auditService);
-const timelineService = new TimelineService(writingStore);
-
-// Phase 11：读者/伏笔服务
-const { ReaderService } = await import('../writing/services/reader-service.js');
-const { ForeshadowingService } = await import('../writing/services/foreshadowing-service.js');
-const readerService = new ReaderService(writingStore, auditService);
-const foreshadowingService = new ForeshadowingService(writingStore, auditService);
-
-// Phase 12：正文/风格/修订/Retcon视图/导入导出服务
-const { ProseService } = await import('../writing/services/prose-service.js');
-const { StyleService } = await import('../writing/services/style-service.js');
-const { RevisionService } = await import('../writing/services/revision-service.js');
-const { RetconViewService } = await import('../writing/services/retcon-view-service.js');
-const { ImportExportService } = await import('../writing/services/import-export-service.js');
-const proseService = new ProseService(writingStore, auditService);
-const styleService = new StyleService(writingStore, auditService);
-const revisionService = new RevisionService(writingStore, auditService);
-const retconViewService = new RetconViewService(writingStore, auditService);
-const importExportService = new ImportExportService(writingStore, auditService, proseService);
-
-// 起草工作台：设定集文档服务（不写 Core，纯写作层资料载体）
-const { DocumentService } = await import('../writing/services/document-service.js');
-const documentService = new DocumentService(writingStore, auditService);
-
-// 延迟注入实体检测服务到 ToolRouter（detect_entity_hints 工具需要；entityService/writingProjectId 此时就绪）
-toolRouter.setEntityService(entityService, writingProjectId);
-toolRouter.setGraphServices(relationService, graphService, writingProjectId);
-toolRouter.setSpatialServices(spatialService, spatialViewService, writingProjectId);
-toolRouter.setChapterSceneServices(chapterService, sceneService, timelineService, writingProjectId);
-toolRouter.setReaderForeshadowingServices(readerService, foreshadowingService, writingProjectId);
-toolRouter.setPhase12Services(proseService, styleService, retconViewService, importExportService, writingProjectId);
-
-// Agent
-const llm = new DeepSeekLLMClientAdapter();
-const agentStore = new SQLiteAgentStoreAdapter(db);
-agentStore.createTables();
-
-// ---- 向量检索管线（Phase 7 闭环基础设施）----
-// 此前 CLI 未接入这两条线，导致两个核心问题：
-//   1. SyncQueueConsumer 从未创建 → 提交事件的 Fact 只写 SQLite+sync_queue，永远不同步到 LanceDB
-//   2. NarrativeAgent 未注入 retriever/renderer → narrative-agent.ts:498 的 Push 注入守卫永远跳过，
-//      Agent 的 ReAct 循环拿不到语义召回的相关 Fact（NarrativeOS 的核心能力在 CLI 场景缺失）
-// 接线方式参考 tests/integration/push-mode-validation.test.ts:64-77。
-// 向量库路径：每项目独立（LANCEDB_DIR 已在 main 开头从 selected.dir 派生）
-if (!existsSync(LANCEDB_DIR)) mkdirSync(LANCEDB_DIR, { recursive: true });
-// 向量栈可选初始化：init 失败（目录不可写、原生绑定缺失、磁盘满）时降级为 undefined，
-// Agent 的 push 守卫（narrative-agent.ts `if (this.retriever && this.renderer)`）会跳过语义召回，
-// 确定性查询（/world /entity 走 SQLite）不受影响。此前 init() 裸调会硬崩。
-let vectorStore: InstanceType<typeof LanceDBTableAdapter> | undefined;
-let retriever: InstanceType<typeof RelevantFactRetriever> | undefined;
-let renderer: InstanceType<typeof FactRenderer> | undefined;
-let consumer: InstanceType<typeof SyncQueueConsumer> | undefined;
-try {
-  vectorStore = new LanceDBTableAdapter(LANCEDB_DIR, 'facts');
-  await vectorStore.init();
-  const embedder = new SiliconFlowEmbeddingService();
-  retriever = new RelevantFactRetriever(factStore, knowledgeStore, threadStore, vectorStore, embedder);
-  renderer = new FactRenderer();
-  consumer = new SyncQueueConsumer(db, vectorStore, embedder);
-} catch (err) {
-  console.warn(`  ⚠️ 向量检索初始化失败，语义召回不可用（确定性查询照常）：${err instanceof Error ? err.message : err}`);
-}
-
-const agent = new NarrativeAgent({
-  llm, toolRouter, agentStore,
-  projectId: CORE_PROJECT_ID, // Core projectId = 项目名（消除 'default' 硬编码）
-  // P0-2 修复：wall-clock 用默认 30 分钟，且已改为"单回合"计时
-  // （见 narrative-agent.startNewTurn 每轮重置 sessionStartTime），避免长 CLI 会话误触发 suspended
-  limits: { maxToolSteps: 32, maxRepeatedToolFailure: 3, maxWallClockMs: 30 * 60 * 1000 },
-  // Phase 7 注入
-  writingProjectId,
-  writingStore, auditService, workflowService,
-  draftService, entityService,
-  coreBridge,
-  // W2：§8.5.5 聚合容器缺的 3 个服务（上方已实例化），注入后 Agent 可组装 writingLayer，
-  // 启用写作层状态注入（assembleWritingContext）+ 题材蓝图感知（buildSystemPrompt 蓝图段）。
-  projectService, blueprintService, ideaService,
-  // Push 语义检索管线：注入后 agent 每轮 Reason 前主动召回相关 Fact 注入上下文（narrative-agent.ts:498）
-  retriever, renderer,
-});
+// 装配 Agent（异步：含 LLM + AgentStore）
+await session.initAgent();
+const agent = session.agent;
 
 agent.startSession('Phase 7 CLI 会话');
 
 // 后台驱动 sync_queue consumer：每 5s 将新提交的 Fact 同步到 LanceDB。
-// processPending 是幂等的原子抢占（UPDATE...RETURNING，sync-queue-consumer.ts:72），无 pending 时空转，
-// 因此定时器 + 启动清积压并发安全。embedding 失败时 consumer 自动退避重试，不阻塞用户交互；
-// 即便未配置 embedding API key，也只是语义检索不工作，确定性查询（/entity、/world 走 SQLite）照常。
+// processPending 是幂等的原子抢占（UPDATE...RETURNING），无 pending 时空转，并发安全。
+// embedding 失败时自动退避重试，不阻塞用户交互；未配置 key 时仅语义检索不工作，确定性查询照常。
 const syncTimer = setInterval(() => {
   if (consumer) {
     consumer.processPending().catch((err: unknown) => console.error(`[SyncQueue] 同步失败: ${String(err).slice(0, 120)}`));
   }
 }, 5000);
-// 启动时立即清一次积压（fire-and-forget，不阻塞就绪）——消费历史提交但未同步的 Fact
+// 启动时立即清一次积压（fire-and-forget）
 if (consumer) {
   consumer.processPending().catch((err: unknown) => console.error(`[SyncQueue] 启动清积压失败: ${String(err).slice(0, 120)}`));
 }
@@ -571,7 +413,12 @@ async function handleCommand(input: string): Promise<boolean> {
         if (t.errorCode) console.log(`      错误: ${t.errorCode}`);
       }
       // token 用量汇总（从 llm_call 类型的 trace 累加）
-      const llmTraces = traces.filter(t => t.stepType === 'llm_call' && t.usage);
+      // 注：session.agent 经 initAgent 异步装配，类型为宽 any，故 traces 需显式标注
+      const typedTraces = traces as Array<{
+        stepType: string; status: string; summary: string; toolName?: string; errorCode?: string;
+        usage?: { prompt_tokens: number; completion_tokens: number; prompt_cache_hit_tokens?: number };
+      }>;
+      const llmTraces = typedTraces.filter(t => t.stepType === 'llm_call' && t.usage);
       if (llmTraces.length > 0) {
         const totalPrompt = llmTraces.reduce((sum, t) => sum + (t.usage!.prompt_tokens), 0);
         const totalCompletion = llmTraces.reduce((sum, t) => sum + (t.usage!.completion_tokens), 0);
@@ -800,7 +647,7 @@ const rl = readline.createInterface({
   const draftsCount = writingStore.listDrafts(writingProjectId).length;
   let tip: string;
   if (sketchesCount === 0 && draftsCount === 0) {
-    tip = `描述你的世界观和主角（例如：这是一个关于${existingProject?.title ?? '这个世界'}的故事，主角叫...）`;
+    tip = `描述你的世界观和主角（例如：这是一个关于${writingStore.getProject(writingProjectId)?.title ?? '这个世界'}的故事，主角叫...）`;
   } else if (draftsCount === 0) {
     tip = '描述一个事件让 Agent 起草（例如：主角在某个场景遇到了什么）';
   } else {
