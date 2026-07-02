@@ -34,6 +34,17 @@ export class ForeshadowingService {
     this.audit.record(ctx, { action: 'update_foreshadowing_status', targetType: 'foreshadowing_plan', targetId: id, result: 'success', detail: { from: plan.status, to: targetStatus } });
   }
 
+  // --- 查询入口（Phase 12 A1：补齐 list 方法，让 Tool 20 get_foreshadowing_plans 不再恒返回空） ---
+  // 此前 store.listForeshadowingPlans 已存在但 service 无对应方法，导致 tool-router 通过
+  // (this as any).store 兜底访问一个在 ToolRouter 中并不存在的属性，结果永远短路为空数组。
+  listForeshadowingPlans(ctx: WritingRequestContext): ForeshadowingPlan[] {
+    return this.store.listForeshadowingPlans(ctx.projectId);
+  }
+
+  listRevealPlans(ctx: WritingRequestContext): RevealPlan[] {
+    return this.store.listRevealPlans(ctx.projectId);
+  }
+
   createHintOccurrence(ctx: WritingRequestContext, input: {
     foreshadowingPlanId: string; intensity: HintIntensity; visibility: HintVisibility;
     chapterId?: string; sceneId?: string; anchor?: { paragraphIndex: number; sentenceIndex?: number; excerpt?: string };

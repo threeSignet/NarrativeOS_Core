@@ -491,6 +491,43 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         required: ['label', 'subject_description'],
       },
     },
+    // ---- Phase 12：正文/风格/Retcon/导出（只读 + 结构化写入） ----
+    get_prose_document: {
+      name: 'get_prose_document',
+      description: '读取正文文档及其全部块（按顺序）。用于查看章节正文内容。',
+      parameters: {
+        type: 'object',
+        properties: {
+          document_id: { type: 'string', description: '正文文档 ID' },
+        },
+        required: ['document_id'],
+      },
+    },
+    get_style_guide: {
+      name: 'get_style_guide',
+      description: '读取项目风格指南（人称/距离/节奏/描写偏好/禁用表达/示例）。',
+      parameters: { type: 'object', properties: {} },
+    },
+    get_retcon_report: {
+      name: 'get_retcon_report',
+      description: '读取 Retcon 影响报告列表，或按 Core retcon proposal id 查最新报告。',
+      parameters: {
+        type: 'object',
+        properties: {
+          retcon_proposal_id: { type: 'string', description: 'Core propose_retcon 返回的 proposal id（可选，不传则列全部）' },
+        },
+      },
+    },
+    export_project: {
+      name: 'export_project',
+      description: '导出项目写作层数据为 JSON（蓝图/实体/关系/空间/章节/场景/读者/伏笔/正文/风格）。只读。',
+      parameters: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', description: '导出范围：all | blueprint | entities | relations | spatial | chapters | scenes | reader | foreshadowing | prose | style' },
+        },
+      },
+    },
   };
 }
 
@@ -541,6 +578,15 @@ export class ToolRouter {
   private readerService: any | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private foreshadowingService: any | undefined;
+  // Phase 12：正文/风格/Retcon视图/导入导出服务
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private proseService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private styleService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private retconViewService: any | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private importExportService: any | undefined;
 
   /** 延迟注入写作层实体检测服务（chat.ts 在 entityService 创建后调用） */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -579,6 +625,16 @@ export class ToolRouter {
   setReaderForeshadowingServices(readerService: any, foreshadowingService: any, writingProjectId: string): void {
     this.readerService = readerService;
     this.foreshadowingService = foreshadowingService;
+    this.writingProjectId = writingProjectId;
+  }
+
+  /** 延迟注入写作层 Phase 12 服务（正文/风格/Retcon视图/导入导出） */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setPhase12Services(proseService: any, styleService: any, retconViewService: any, importExportService: any, writingProjectId: string): void {
+    this.proseService = proseService;
+    this.styleService = styleService;
+    this.retconViewService = retconViewService;
+    this.importExportService = importExportService;
     this.writingProjectId = writingProjectId;
   }
   // P1-1 修复：entityIdSeq 已移除——实体 ID 改用 entities 表存在性探测（见 handleRegisterEntity），持久化且重启安全
@@ -644,6 +700,11 @@ export class ToolRouter {
         case 'get_foreshadowing_plans':  return await this.handleGetForeshadowingPlans(params);
         case 'create_reader_knowledge_state': return await this.handleCreateReaderKnowledgeState(params);
         case 'create_reveal_plan':         return await this.handleCreateRevealPlan(params);
+        // Phase 12：正文/风格/Retcon/导出（只读 + 结构化）
+        case 'get_prose_document':         return await this.handleGetProseDocument(params);
+        case 'get_style_guide':            return await this.handleGetStyleGuide(params);
+        case 'get_retcon_report':          return await this.handleGetRetconReport(params);
+        case 'export_project':             return await this.handleExportProject(params);
         default:
           return this.error(ToolErrorCode.UNKNOWN_TOOL, `未知工具: ${toolName}`, false, `可用工具: ${this.toolNames().join(', ')}`);
       }
@@ -693,6 +754,7 @@ export class ToolRouter {
       'detect_spatial_nodes', 'get_spatial_view',
       'create_chapter_plan', 'create_scene_plan', 'get_timeline_view',
       'create_foreshadowing_plan', 'get_foreshadowing_plans', 'create_reader_knowledge_state', 'create_reveal_plan',
+      'get_prose_document', 'get_style_guide', 'get_retcon_report', 'export_project',
     ];
   }
 
@@ -1497,8 +1559,10 @@ export class ToolRouter {
     if (!this.foreshadowingService || !this.writingProjectId) {
       return this.error(ToolErrorCode.INTERNAL_ERROR, '伏笔服务未配置', false);
     }
-    const store = (this as any).store as { listForeshadowingPlans: (pid: string) => any[] };
-    const plans = store?.listForeshadowingPlans(this.writingProjectId) ?? [];
+    // A1 修复：此前通过 (this as any).store 访问 ToolRouter 不存在的 store 属性，恒返回空数组。
+    // 改走 ForeshadowingService.listForeshadowingPlans，单一事实源（store.listForeshadowingPlans）。
+    const ctx = this.makeToolContext('reader');
+    const plans = this.foreshadowingService.listForeshadowingPlans(ctx);
     const lines = [`## 伏笔计划（${plans.length} 个）\n`];
     for (const p of plans) {
       lines.push(`- [${p.status}] ${p.label} (${p.kind})`);
@@ -1541,6 +1605,103 @@ export class ToolRouter {
       targetReaderEffect: typeof params['target_reader_effect'] === 'string' ? params['target_reader_effect'] : undefined,
     });
     return this.ok({ id: plan.id, label: plan.label, status: plan.status });
+  }
+
+  // =========================================================================
+  // Phase 12：正文/风格/Retcon/导出工具
+  // =========================================================================
+
+  private async handleGetProseDocument(params: Record<string, unknown>) {
+    if (!this.proseService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '正文服务未配置', false);
+    }
+    const documentId = typeof params['document_id'] === 'string' ? params['document_id'] : '';
+    if (!documentId) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'document_id 必填', false);
+    const ctx = this.makeToolContext('prose');
+    try {
+      const { document, blocks } = this.proseService.getDocumentWithBlocks(ctx, documentId);
+      const lines = [`## ${document.title}（v${document.version}, ${blocks.length} 块）\n`];
+      for (const b of blocks) {
+        lines.push(b.text);
+      }
+      return this.ok({
+        documentId: document.id, title: document.title, version: document.version,
+        blockCount: blocks.length, markdown: lines.join('\n'),
+      });
+    } catch (err) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);
+    }
+  }
+
+  private async handleGetStyleGuide(_params: Record<string, unknown>) {
+    if (!this.styleService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '风格服务未配置', false);
+    }
+    const ctx = this.makeToolContext('style');
+    try {
+      const guide = this.styleService.getOrCreateDefaultGuide(ctx);
+      const examples = this.styleService.listExamples(ctx);
+      const banned = this.styleService.listBannedExpressions(ctx);
+      return this.ok({
+        guide: {
+          id: guide.id, name: guide.name,
+          narrativePerson: guide.narrativePerson, narrativeDistance: guide.narrativeDistance,
+          pacingPreference: guide.pacingPreference, descriptionPreference: guide.descriptionPreference,
+          status: guide.status,
+        },
+        exampleCount: examples.length,
+        bannedExpressionCount: banned.length,
+      });
+    } catch (err) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);
+    }
+  }
+
+  private async handleGetRetconReport(params: Record<string, unknown>) {
+    if (!this.retconViewService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, 'Retcon视图服务未配置', false);
+    }
+    const ctx = this.makeToolContext('retcon');
+    try {
+      const proposalId = typeof params['retcon_proposal_id'] === 'string' ? params['retcon_proposal_id'] : undefined;
+      if (proposalId) {
+        const report = this.retconViewService.getReportByProposal(proposalId);
+        if (!report) return this.ok({ found: false, message: '该 proposal 暂无影响报告' });
+        return this.ok({
+          found: true, reportId: report.id, status: report.status,
+          affectedNodeCount: report.affectedNodes.length,
+          recheckCount: report.recheckList.length,
+          summary: report.summary,
+        });
+      }
+      // 列全部
+      const reports = this.retconViewService.listReports(ctx);
+      const lines = [`## Retcon 影响报告（${reports.length} 个）\n`];
+      for (const r of reports) {
+        lines.push(`- [${r.status}] ${r.retconProposalId}（${r.affectedNodes.length} 节点, ${r.recheckList.length} 重检）`);
+      }
+      return this.ok({ count: reports.length, markdown: lines.join('\n') });
+    } catch (err) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);
+    }
+  }
+
+  private async handleExportProject(params: Record<string, unknown>) {
+    if (!this.importExportService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '导入导出服务未配置', false);
+    }
+    const ctx = this.makeToolContext('export');
+    const scope = typeof params['scope'] === 'string' ? params['scope'] : 'all';
+    try {
+      const result = this.importExportService.exportProject(ctx, scope);
+      return this.ok({
+        projectId: result.projectId, scope: result.scope,
+        scopes: Object.keys(result.data),
+        sizeBytes: Buffer.byteLength(JSON.stringify(result.data), 'utf-8'),
+      });
+    } catch (err) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);
+    }
   }
 
   // =========================================================================

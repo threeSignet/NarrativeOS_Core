@@ -66,22 +66,24 @@ describe('ToolRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('基础功能', () => {
-    it('getDefinitions() 应返回 22 个工具定义（含 Phase 8-11）', () => {
+    it('getDefinitions() 应返回 26 个工具定义（含 Phase 8-12）', () => {
       const defs = router.getDefinitions();
-      expect(defs).toHaveLength(22);
+      expect(defs).toHaveLength(26);
       const names = defs.map(d => d.name).sort();
       expect(names).toEqual([
         'commit_event', 'commit_retcon', 'commit_schema_extension',
         'create_chapter_plan', 'create_foreshadowing_plan', 'create_reader_knowledge_state', 'create_reveal_plan', 'create_scene_plan',
         'detect_entity_hints', 'detect_relation_hints', 'detect_spatial_nodes',
-        'get_context_slice', 'get_foreshadowing_plans', 'get_graph_view', 'get_open_threads', 'get_spatial_view', 'get_timeline_view',
+        'export_project',
+        'get_context_slice', 'get_foreshadowing_plans', 'get_graph_view', 'get_open_threads',
+        'get_prose_document', 'get_retcon_report', 'get_spatial_view', 'get_style_guide', 'get_timeline_view',
         'propose_event', 'propose_retcon', 'propose_schema_extension',
         'register_entity', 'resolve_thread',
       ]);
     });
 
-    it('toolNames() 应返回 22 个名称', () => {
-      expect(router.toolNames()).toHaveLength(22);
+    it('toolNames() 应返回 26 个名称', () => {
+      expect(router.toolNames()).toHaveLength(26);
     });
 
     it('每个 ToolDefinition 应有 name/description/parameters', () => {
@@ -541,6 +543,9 @@ import { SQLiteWritingStore } from '../../src/writing/repositories/writing-store
 import { EntityService } from '../../src/writing/services/entity-service.js';
 import { AuditService } from '../../src/writing/services/audit-service.js';
 import { WorkflowService } from '../../src/writing/services/workflow-service.js';
+import { ForeshadowingService } from '../../src/writing/services/foreshadowing-service.js';
+import { ReaderService } from '../../src/writing/services/reader-service.js';
+import { makeRequestContext } from '../../src/writing/services/context.js';
 
 describe('ToolRouter > detect_entity_hints', () => {
   let router: ToolRouter;
@@ -625,5 +630,73 @@ describe('ToolRouter > detect_entity_hints', () => {
     const queue = entityService.listCandidateQueue(ctx);
     // detectEntityHints 建 hint（非 candidate），listCandidateQueue 只查 candidate，
     // 所以这里查 0 是对的——验证 hint 在 store 里
+  });
+});
+
+// =============================================================================
+// Tool 20: get_foreshadowing_plans —— A1 修复回归
+// 此前 handler 通过 (this as any).store 访问 ToolRouter 不存在的 store 属性，
+// 恒返回空数组。修复后走 ForeshadowingService.listForeshadowingPlans。
+// =============================================================================
+describe('ToolRouter > Tool 20: get_foreshadowing_plans', () => {
+  let router: ToolRouter;
+
+  beforeEach(() => {
+    const factStore = new SQLiteFactStoreAdapter(':memory:', 'default');
+    const db = factStore.getDatabase();
+    const threadStore = new SQLiteThreadStoreAdapter(db);
+    const proposalManager = new ProposalManager(new RuleEngine(), undefined, threadStore, new ThreadResolver());
+    const retconEngine = new RetconEngine();
+    const toolService = new ToolService(factStore, new SQLiteKnowledgeStoreAdapter(db), new SQLiteEventStoreAdapter(db), threadStore, new ThreadResolver());
+    const schemaExt = new SchemaExtensionManager(db, 'default');
+    router = new ToolRouter({
+      proposalManager, retconEngine, toolService, schemaExtensionManager: schemaExt,
+      factStore, knowledgeStore: new SQLiteKnowledgeStoreAdapter(db),
+      eventStore: new SQLiteEventStoreAdapter(db), threadStore,
+    });
+
+    // 写作层 + 注入 ForeshadowingService（复用 detect_entity_hints 套件的注入模式）
+    const writingStore = new SQLiteWritingStore(db);
+    writingStore.createTables();
+    const projectId = writingStore.createProject('伏笔工具测试').id;
+    const auditService = new AuditService(writingStore);
+    const readerService = new ReaderService(writingStore, auditService);
+    const foreshadowingService = new ForeshadowingService(writingStore, auditService);
+    router.setReaderForeshadowingServices(readerService, foreshadowingService, projectId);
+
+    // 预置数据：两条伏笔计划
+    const ctx = makeRequestContext({ projectId, trigger: 'author_action' });
+    foreshadowingService.createForeshadowingPlan(ctx, { label: '诛仙剑来历', kind: 'clue', targetReaderEffect: '好奇' });
+    foreshadowingService.createForeshadowingPlan(ctx, { label: '南宫婉去向', kind: 'suspense', targetReaderEffect: '紧张' });
+  });
+
+  it('运行时返回真实伏笔计划（A1 修复回归：不再恒返回空）', async () => {
+    const result = await router.execute('get_foreshadowing_plans', {});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { count: number; markdown: string };
+      expect(data.count).toBe(2);
+      expect(data.markdown).toContain('诛仙剑来历');
+      expect(data.markdown).toContain('南宫婉去向');
+    }
+  });
+
+  it('未注入 foreshadowingService 时报 INTERNAL_ERROR', async () => {
+    const factStore = new SQLiteFactStoreAdapter(':memory:', 'default');
+    const db = factStore.getDatabase();
+    const threadStore = new SQLiteThreadStoreAdapter(db);
+    const bareRouter = new ToolRouter({
+      proposalManager: new ProposalManager(new RuleEngine(), undefined, threadStore, new ThreadResolver()),
+      retconEngine: new RetconEngine(),
+      toolService: new ToolService(factStore, new SQLiteKnowledgeStoreAdapter(db), new SQLiteEventStoreAdapter(db), threadStore, new ThreadResolver()),
+      schemaExtensionManager: new SchemaExtensionManager(db, 'default'),
+      factStore, knowledgeStore: new SQLiteKnowledgeStoreAdapter(db),
+      eventStore: new SQLiteEventStoreAdapter(db), threadStore,
+    });
+    const result = await bareRouter.execute('get_foreshadowing_plans', {});
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(ToolErrorCode.INTERNAL_ERROR);
+    }
   });
 });

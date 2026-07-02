@@ -247,6 +247,7 @@ export type DraftStatus =
   | 'ready_to_simulate'
   | 'simulated'
   | 'committed'
+  | 'revising'
   | 'archived'
   | 'error';
 
@@ -1058,4 +1059,355 @@ export interface RevealMilestone {
   sceneId?: string;
   description: string;
   createdAt: string;
+}
+
+// =============================================================================
+// Phase 12：正文 / 风格 / 修订 / Retcon视图 / 导入导出（Feature-Spec §13/§18/§19/§10.5/§20/§23）
+// 数据层闭环：类型 + DDL + Store + Service + 状态机 + CLI + Agent 工具。
+// 不含 LLM 生成 / embedding 漂移检测等重 AI 部分（正文生成、风格检查留给前端会话或后续）。
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// §13.8 正文文档模型——块级正文
+// ---------------------------------------------------------------------------
+
+/** 正文块类型（§13.8） */
+export type ProseBlockKind =
+  | 'chapter_title' | 'scene_heading' | 'paragraph'
+  | 'dialogue' | 'note' | 'separator';
+
+/** 正文文档编辑模式（§13.8） */
+export type ProseDocumentMode = 'edit' | 'preview' | 'split';
+
+/**
+ * 正文文档——一篇正文的容器，含若干块。
+ * 与 WritingDraft(kind='prose') 的关系：Draft 是创作过程对象（可多版本/可废弃），
+ * ProseDocument 是块级正文本体（稳定锚点 + 段落级粒度）。
+ */
+export interface ProseDocument {
+  id: string;
+  projectId: string;
+  title: string;
+  /** 当前版本标识，正文每次结构变更递增 */
+  versionId: string;
+  mode: ProseDocumentMode;
+  /** 关联的草稿 id（可选，prose 类型 WritingDraft 的 linked 指针） */
+  draftId?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/**
+ * 正文块——段落/对白/标题/注释/分隔。
+ * 块有稳定 id（blockId），用于锚点、版本对比、候选来源引用。
+ */
+export interface ProseBlock {
+  id: string;
+  documentId: string;
+  kind: ProseBlockKind;
+  /** 块在文档中的顺序（从 0 起） */
+  orderIndex: number;
+  text: string;
+  /** 关联场景（可选，用于场景到正文映射 §14.6） */
+  sceneId?: string;
+  sourceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 文本锚点——选区/提示/反馈/候选/提案在正文中的定位（§13.8）。
+ * 当正文编辑导致锚点偏移时，系统尝试自动迁移；无法迁移则标记 needs_review。
+ */
+export interface TextAnchor {
+  documentId: string;
+  blockId: string;
+  startOffset: number;
+  endOffset: number;
+  quote?: string;
+  anchorStatus: 'valid' | 'shifted' | 'needs_review' | 'broken';
+}
+
+// ---------------------------------------------------------------------------
+// §18.1 风格指南
+// ---------------------------------------------------------------------------
+
+/** 叙述人称（§18.1） */
+export type NarrativePerson = 'first' | 'third' | 'omniscient' | 'mixed' | 'unspecified';
+
+/** 叙事距离（§18.1） */
+export type NarrativeDistance = 'close' | 'medium' | 'distant' | 'variable';
+
+/** 节奏偏好（§18.1） */
+export type PacingPreference = 'tight' | 'balanced' | 'slow_burn' | 'variable';
+
+/** 描写偏好（§18.1，多选） */
+export type DescriptionPreference = 'action' | 'psychology' | 'sensory' | 'environment' | 'dialogue';
+
+/** 风格指南状态 */
+export type StyleGuideStatus = 'draft' | 'active' | 'archived';
+
+/**
+ * 风格指南——作品整体语言风格、叙述人称、节奏、描写偏好、禁用表达。
+ * 1:1 容器表（项目默认指南，project_id UNIQUE）；变体作为独立 guide 行，scope 区分。
+ * 不进 Core（§18.1 验收「风格指南不进入 Core」）。
+ */
+export interface StyleGuide {
+  id: string;
+  projectId: string;
+  name: string;
+  narrativePerson: NarrativePerson;
+  narrativeDistance: NarrativeDistance;
+  pacingPreference: PacingPreference;
+  descriptionPreference: DescriptionPreference[];
+  /** 禁用表达 id 列表（指向 writing_banned_expressions） */
+  bannedExpressionIds: string[];
+  /** 示例 id 列表（指向 writing_style_examples） */
+  exampleIds: string[];
+  /** 适用范围：default 全书默认；variant 局部变体（需配合 scopeNote） */
+  scope: 'default' | 'variant';
+  scopeNote?: string;
+  status: StyleGuideStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
+/** 风格示例类型 */
+export type StyleExampleKind = 'positive' | 'negative';
+
+/**
+ * 风格示例——作者提供「像这个」「不要像这个」的样本文本（§18.2）。
+ */
+export interface StyleExample {
+  id: string;
+  projectId: string;
+  kind: StyleExampleKind;
+  text: string;
+  note?: string;
+  /** 来源正文块（可选，从自己正文中选取） */
+  sourceBlockId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 禁用表达——套路句、网络腔、过度解释等（§18.3）。
+ */
+export interface BannedExpression {
+  id: string;
+  projectId: string;
+  pattern: string;
+  reason?: string;
+  /** 分类标签，如「套路句」「网络腔」「过度抒情」 */
+  category?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// §19.1 修订系统——通用修订记录
+// ---------------------------------------------------------------------------
+
+/** 修订目标对象类型 */
+export type RevisionTargetType =
+  | 'draft' | 'prose_document' | 'entity_sketch' | 'chapter_plan' | 'scene_plan'
+  | 'foreshadowing_plan' | 'reveal_plan' | 'style_guide' | 'other';
+
+/** 修订动作 */
+export type RevisionAction = 'create' | 'update' | 'delete' | 'restore' | 'reorder';
+
+/**
+ * 修订记录——写作层通用版本历史（§19.1）。
+ * 覆盖草案/正文/候选/计划等所有写作层对象的修订轨迹。
+ * 仅写作层，不触发 Core（§19.1 验收「未提交内容修订不触发 Retcon」）。
+ */
+export interface RevisionRecord {
+  id: string;
+  projectId: string;
+  targetType: RevisionTargetType;
+  targetId: string;
+  action: RevisionAction;
+  summary: string;
+  /** 修订前快照（JSON） */
+  beforeSnapshot?: Record<string, unknown>;
+  /** 修订后快照（JSON） */
+  afterSnapshot?: Record<string, unknown>;
+  /** 版本组 id（同一对象的多次修订归为一组，复用 draft.version_group_id 概念） */
+  versionGroupId: string;
+  /** 操作者：author / agent */
+  operator: 'author' | 'agent';
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// §10.5 / §19.4 Retcon 影响报告
+// ---------------------------------------------------------------------------
+
+/** Retcon 影响报告状态 */
+export type RetconReportStatus = 'pending' | 'confirmed' | 'rejected' | 'superseded';
+
+/** 受影响节点类型（§10.5） */
+export type RetconAffectedKind =
+  | 'fact' | 'thread' | 'knowledge' | 'entity' | 'event'
+  | 'timeline_item' | 'spatial_node' | 'foreshadowing_plan';
+
+/** 受影响节点的影响方式（§10.5） */
+export type RetconAffectedEffect = 'invalidated' | 'contested' | 'replaced' | 'rederived' | 'needs_recheck';
+
+/** 受影响节点 */
+export interface RetconAffectedNode {
+  kind: RetconAffectedKind;
+  id: string;
+  label: string;
+  effect: RetconAffectedEffect;
+  /** 简述为何受影响 */
+  reason?: string;
+}
+
+/** 受影响边 */
+export interface RetconAffectedEdge {
+  sourceNodeId: string;
+  targetNodeId: string;
+  kind: string;
+  label?: string;
+}
+
+/** 写作层对象重检项（§10.5 WritingArtifactRecheckList） */
+export interface WritingArtifactRecheckItem {
+  targetType: RevisionTargetType;
+  targetId: string;
+  label: string;
+  reason: string;
+}
+
+/**
+ * Retcon 影响报告——从 Core propose_retcon 结果投影（§10.5）。
+ * 确认前只读，不改变正式图谱（§10.5 验收）。
+ */
+export interface RetconImpactReport {
+  id: string;
+  projectId: string;
+  /** 关联的 Core retcon proposal id */
+  retconProposalId: string;
+  status: RetconReportStatus;
+  affectedNodes: RetconAffectedNode[];
+  affectedEdges: RetconAffectedEdge[];
+  recheckList: WritingArtifactRecheckItem[];
+  /** 报告摘要 */
+  summary: string;
+  createdAt: string;
+  confirmedAt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// §20.1 导入批次
+// ---------------------------------------------------------------------------
+
+/** 导入类型（§20.1） */
+export type ImportType = 'prose' | 'draft' | 'setting_collection' | 'chapter_fragment' | 'mixed';
+
+/** 导入批次状态 */
+export type ImportBatchStatus = 'pending' | 'imported' | 'cancelled' | 'failed';
+
+/**
+ * 导入批次——记录一次导入操作的原始文本快照与元信息（§20.1）。
+ * 导入只保留原文并转换为写作层文档，不写 Core（§20.1 验收）。
+ */
+export interface ImportBatch {
+  id: string;
+  projectId: string;
+  sourceFilename?: string;
+  importType: ImportType;
+  status: ImportBatchStatus;
+  /** 原始文本快照（导入失败也不丢失原文，§20.1 验收） */
+  rawSnapshot: string;
+  /** 导入来源元信息（编码/换行/章节切分规则等） */
+  metadata: Record<string, unknown>;
+  /** 导入后生成的文档 id 列表 */
+  generatedDocumentIds: string[];
+  createdAt: string;
+  completedAt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// 设定集文档模型——文档树 + 富文本设定（起草工作台核心载体，不写 Core）
+// ---------------------------------------------------------------------------
+
+/**
+ * 文档节点类型。
+ * - folder：纯容器，只做组织，无正文
+ * - document：富文本设定文档（角色卡/世界观条目/任意设定）
+ * - chapter_ref：绑定章节正文入口（未来，本轮不实现）
+ */
+export type WritingDocumentKind = 'folder' | 'document' | 'chapter_ref';
+
+/**
+ * 设定文档模板类型。
+ * 本轮仅落地 freeform（空白富文本）；其余为预留枚举，供下一轮结构化模板扩展。
+ */
+export type WritingDocumentTemplate =
+  | 'freeform'    // 空白富文本（默认）
+  | 'character'   // 角色卡（预留）
+  | 'location'    // 地点卡（预留）
+  | 'faction'     // 势力卡（预留）
+  | 'item'        // 物品卡（预留）
+  | 'lore';       // 世界观条目（预留）
+
+/** 富文本内容存储格式。本轮默认 tiptap（结构化 JSON，便于未来加实体高亮节点）。 */
+export type DocumentContentFormat = 'tiptap' | 'html' | 'plaintext';
+
+/** 文档状态 */
+export type WritingDocumentStatus = 'active' | 'archived';
+
+/**
+ * 写作层文档——设定集的文档树节点。
+ *
+ * 设计定位：起草工作台的"组织 + 编辑"地基。作者用它把世界观、角色、
+ * 势力、章节入口组织成一棵可拖拽的树，每个 document 节点承载一份富文本设定。
+ *
+ * 与现有概念的关系：
+ *   - 与 ProseDocument（§13.8）不同：ProseDocument 是章节正文的块级精细模型
+ *     （服务 AI 锚点/版本对比），WritingDocument 是设定集的文档树节点（服务组织/编辑）。
+ *   - 与 WritingDraft 不同：Draft 是创作过程对象（可多版本/可废弃/走审核），
+ *     WritingDocument 是相对稳定的参考资料载体（不走 Core 审核）。
+ *   - chapter_ref 类型未来可作为章节正文入口，绑定 ChapterPlan + WritingDraft。
+ *
+ * 不变式：
+ *   - 所有内容存 SQLite（writing_documents 表），不写 Core
+ *   - parentId 形成树结构；move 时必须防循环（不能移入自己或自己的后代）
+ *   - 软删除（archived）时子节点级联归档
+ */
+export interface WritingDocument {
+  id: string;
+  projectId: string;
+  /** 父文件夹 ID；null = 根节点 */
+  parentId: string | null;
+  kind: WritingDocumentKind;
+  template: WritingDocumentTemplate;
+  title: string;
+  /** 可选自定义图标（emoji 或 SVG key） */
+  icon?: string;
+  /** 富文本正文（仅 kind=document 有效）；TipTap JSON / HTML / 纯文本 */
+  content?: string;
+  contentFormat?: DocumentContentFormat;
+  /** 绑定的 ChapterPlan ID（仅 kind=chapter_ref，未来） */
+  chapterPlanId?: string;
+  /** 绑定的 WritingDraft ID（仅 kind=chapter_ref，未来） */
+  draftId?: string;
+  /** 同级排序（拖拽改这个；move/reorder 时批量更新） */
+  sortOrder: number;
+  /** 模板结构化字段（角色卡等模板用）；本轮 freeform 不用 */
+  templateFields?: Record<string, string>;
+  /** 字数统计（仅 document，updateContent 时自动重算） */
+  wordCount?: number;
+  tags?: string[];
+  status: WritingDocumentStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
 }

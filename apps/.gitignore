@@ -1,0 +1,5 @@
+# 子工程忽略
+node_modules/
+dist/
+# BFF 本地数据库
+apps/bff/data/

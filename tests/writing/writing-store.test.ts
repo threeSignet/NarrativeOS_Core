@@ -26,7 +26,7 @@ describe('WritingStore 建表验证', () => {
   // 建表验证 — 确认 11 张表全部创建
   // =============================================================================
 
-  it('28 张表全部创建成功（13 原 + 3 Phase 8 + 3 Phase 9 + 2 Phase 10 + 7 Phase 11）', () => {
+  it('37 张表全部创建成功（13 原 + 3 Phase 8 + 3 Phase 9 + 2 Phase 10 + 7 Phase 11 + 8 Phase 12/起草工作台）', () => {
     const tables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'writing_%' ORDER BY name"
     ).all() as Array<{ name: string }>;
@@ -65,7 +65,18 @@ describe('WritingStore 建表验证', () => {
     expect(names).toContain('writing_payoff_plans');
     expect(names).toContain('writing_reveal_plans');
     expect(names).toContain('writing_reveal_milestones');
-    expect(tables.length).toBe(28);
+    // Phase 12：正文/风格/修订/Retcon视图/导入
+    expect(names).toContain('writing_prose_documents');
+    expect(names).toContain('writing_prose_blocks');
+    expect(names).toContain('writing_style_guides');
+    expect(names).toContain('writing_style_examples');
+    expect(names).toContain('writing_banned_expressions');
+    expect(names).toContain('writing_revision_records');
+    expect(names).toContain('writing_retcon_reports');
+    expect(names).toContain('writing_import_batches');
+    // 起草工作台：设定集文档树
+    expect(names).toContain('writing_documents');
+    expect(tables.length).toBe(37);
   });
 
   // =============================================================================

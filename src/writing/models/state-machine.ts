@@ -127,7 +127,9 @@ const DRAFT_TRANSITIONS: Record<string, string[]> = {
   'drafting':             ['ready_to_simulate', 'simulated', 'archived'],
   'ready_to_simulate':    ['simulated', 'drafting', 'archived'],
   'simulated':            ['committed', 'drafting', 'archived'],
-  'committed':            [],
+  // Phase 12 §19.1：已提交草案可进入 revising（作者开始追改流程，正式状态变更仍走 Retcon）
+  'committed':            ['revising'],
+  'revising':             ['committed', 'drafting', 'archived'],
   'archived':             ['drafting'],
   'error':                ['drafting', 'archived'],
 };

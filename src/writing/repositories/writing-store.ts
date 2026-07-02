@@ -56,6 +56,16 @@ import type {
   HintOccurrence, HintIntensity, HintVisibility, HintOccurrenceStatus,
   PayoffPlan, PayoffPlanStatus, PayoffKind,
   RevealPlan, RevealPlanStatus, RevealMilestone, RevealMilestoneKind,
+  // Phase 12：正文 / 风格 / 修订 / Retcon视图 / 导入
+  ProseDocument, ProseBlock, ProseBlockKind, ProseDocumentMode,
+  StyleGuide, StyleExample, StyleExampleKind, BannedExpression,
+  NarrativePerson, NarrativeDistance, PacingPreference, DescriptionPreference, StyleGuideStatus,
+  RevisionRecord, RevisionTargetType, RevisionAction,
+  RetconImpactReport, RetconReportStatus, RetconAffectedNode, RetconAffectedEdge, WritingArtifactRecheckItem,
+  ImportBatch, ImportType, ImportBatchStatus,
+  // 起草工作台：设定集文档树
+  WritingDocument, WritingDocumentKind, WritingDocumentTemplate,
+  DocumentContentFormat, WritingDocumentStatus,
 } from '../models/types.js';
 import type { SourceRef } from '../models/source-ref.js';
 import { WritingError, WritingErrorCode } from '../errors/error-codes.js';
@@ -181,7 +191,7 @@ CREATE TABLE IF NOT EXISTS writing_drafts (
   content                 TEXT NOT NULL DEFAULT '',
   summary                 TEXT,
   status                  TEXT NOT NULL DEFAULT 'drafting'
-                          CHECK(status IN ('drafting','ready_to_simulate','simulated','committed','archived','error')),
+                          CHECK(status IN ('drafting','ready_to_simulate','simulated','committed','revising','archived','error')),
   version                 INTEGER NOT NULL DEFAULT 1,
   source_refs_json        TEXT NOT NULL DEFAULT '[]',
   linked_proposal_view_id TEXT,
@@ -640,6 +650,193 @@ CREATE TABLE IF NOT EXISTS writing_reveal_milestones (
   FOREIGN KEY (reveal_plan_id) REFERENCES writing_reveal_plans(id)
 );
 CREATE INDEX IF NOT EXISTS idx_wrm_plan ON writing_reveal_milestones(reveal_plan_id);
+
+-- =============================================================================
+-- Phase 12：正文 / 风格 / 修订 / Retcon视图 / 导入（Feature-Spec §13/§18/§19/§10.5/§20）
+-- 数据层闭环。每张表遵循 W.N 编号 + 标准列 + CHECK + 索引约定。
+-- =============================================================================
+
+-- W.29 writing_prose_documents：正文文档（§13.8）。块级正文的容器。
+CREATE TABLE IF NOT EXISTS writing_prose_documents (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  title         TEXT NOT NULL DEFAULT '',
+  version_id    TEXT NOT NULL,
+  mode          TEXT NOT NULL DEFAULT 'edit'
+                CHECK(mode IN ('edit','preview','split')),
+  draft_id      TEXT,
+  version       INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at    TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpd_project ON writing_prose_documents(project_id, deleted_at);
+
+-- W.30 writing_prose_blocks：正文块（§13.8）。段落/对白/标题/注释/分隔，稳定 blockId。
+CREATE TABLE IF NOT EXISTS writing_prose_blocks (
+  id                TEXT PRIMARY KEY,
+  document_id       TEXT NOT NULL,
+  kind              TEXT NOT NULL DEFAULT 'paragraph'
+                    CHECK(kind IN ('chapter_title','scene_heading','paragraph','dialogue','note','separator')),
+  order_index       INTEGER NOT NULL DEFAULT 0,
+  text              TEXT NOT NULL DEFAULT '',
+  scene_id          TEXT,
+  source_refs_json  TEXT NOT NULL DEFAULT '[]',
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (document_id) REFERENCES writing_prose_documents(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wpb_doc ON writing_prose_blocks(document_id, order_index);
+CREATE INDEX IF NOT EXISTS idx_wpb_scene ON writing_prose_blocks(scene_id);
+
+-- W.31 writing_style_guides：风格指南（§18.1）。1:1 容器（项目默认指南，scope=default）。
+CREATE TABLE IF NOT EXISTS writing_style_guides (
+  id                            TEXT PRIMARY KEY,
+  project_id                    TEXT NOT NULL,
+  name                          TEXT NOT NULL DEFAULT '默认风格',
+  narrative_person              TEXT NOT NULL DEFAULT 'unspecified'
+                                CHECK(narrative_person IN ('first','third','omniscient','mixed','unspecified')),
+  narrative_distance            TEXT NOT NULL DEFAULT 'variable'
+                                CHECK(narrative_distance IN ('close','medium','distant','variable')),
+  pacing_preference             TEXT NOT NULL DEFAULT 'balanced'
+                                CHECK(pacing_preference IN ('tight','balanced','slow_burn','variable')),
+  description_preference_json   TEXT NOT NULL DEFAULT '[]',
+  banned_expression_ids_json    TEXT NOT NULL DEFAULT '[]',
+  example_ids_json              TEXT NOT NULL DEFAULT '[]',
+  scope                         TEXT NOT NULL DEFAULT 'default'
+                                CHECK(scope IN ('default','variant')),
+  scope_note                    TEXT,
+  status                        TEXT NOT NULL DEFAULT 'draft'
+                                CHECK(status IN ('draft','active','archived')),
+  version                       INTEGER NOT NULL DEFAULT 1,
+  created_at                    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at                    TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at                    TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wsg_project ON writing_style_guides(project_id, scope, status);
+
+-- W.32 writing_style_examples：风格示例（§18.2）。正向/反向样本文本。
+CREATE TABLE IF NOT EXISTS writing_style_examples (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL,
+  kind            TEXT NOT NULL DEFAULT 'positive'
+                  CHECK(kind IN ('positive','negative')),
+  text            TEXT NOT NULL DEFAULT '',
+  note            TEXT,
+  source_block_id TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at      TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wse_project ON writing_style_examples(project_id, kind);
+
+-- W.33 writing_banned_expressions：禁用表达（§18.3）。
+CREATE TABLE IF NOT EXISTS writing_banned_expressions (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  pattern     TEXT NOT NULL DEFAULT '',
+  reason      TEXT,
+  category    TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at  TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wbe_project ON writing_banned_expressions(project_id);
+
+-- W.34 writing_revision_records：通用修订记录（§19.1）。覆盖所有写作层对象版本历史。
+CREATE TABLE IF NOT EXISTS writing_revision_records (
+  id                    TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  target_type           TEXT NOT NULL,
+  target_id             TEXT NOT NULL,
+  action                TEXT NOT NULL,
+  summary               TEXT NOT NULL DEFAULT '',
+  before_snapshot_json  TEXT,
+  after_snapshot_json   TEXT,
+  version_group_id      TEXT NOT NULL,
+  operator              TEXT NOT NULL DEFAULT 'author'
+                        CHECK(operator IN ('author','agent')),
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at            TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wrr_target ON writing_revision_records(target_type, target_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_wrr_group ON writing_revision_records(version_group_id);
+
+-- W.35 writing_retcon_reports：Retcon 影响报告（§10.5/§19.4）。从 Core propose_retcon 结果投影。
+CREATE TABLE IF NOT EXISTS writing_retcon_reports (
+  id                       TEXT PRIMARY KEY,
+  project_id               TEXT NOT NULL,
+  retcon_proposal_id       TEXT NOT NULL,
+  status                   TEXT NOT NULL DEFAULT 'pending'
+                           CHECK(status IN ('pending','confirmed','rejected','superseded')),
+  affected_nodes_json      TEXT NOT NULL DEFAULT '[]',
+  affected_edges_json      TEXT NOT NULL DEFAULT '[]',
+  recheck_list_json        TEXT NOT NULL DEFAULT '[]',
+  summary                  TEXT NOT NULL DEFAULT '',
+  created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+  confirmed_at             TEXT,
+  deleted_at               TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wrrp_proposal ON writing_retcon_reports(retcon_proposal_id);
+CREATE INDEX IF NOT EXISTS idx_wrrp_project ON writing_retcon_reports(project_id, status);
+
+-- W.36 writing_import_batches：导入批次（§20.1）。记录原始文本快照与切分结果。
+CREATE TABLE IF NOT EXISTS writing_import_batches (
+  id                         TEXT PRIMARY KEY,
+  project_id                 TEXT NOT NULL,
+  source_filename            TEXT,
+  import_type                TEXT NOT NULL DEFAULT 'mixed'
+                             CHECK(import_type IN ('prose','draft','setting_collection','chapter_fragment','mixed')),
+  status                     TEXT NOT NULL DEFAULT 'pending'
+                             CHECK(status IN ('pending','imported','cancelled','failed')),
+  raw_snapshot               TEXT NOT NULL DEFAULT '',
+  metadata_json              TEXT NOT NULL DEFAULT '{}',
+  generated_document_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at               TEXT,
+  deleted_at                 TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wib_project ON writing_import_batches(project_id, status);
+
+-- W.37 writing_documents：设定集文档树节点（起草工作台）。文档树 + 富文本设定，
+-- 不写 Core。与 W.29 writing_prose_documents 不同：prose 是章节正文的块级精细模型，
+-- documents 是设定集的文档树组织载体。
+CREATE TABLE IF NOT EXISTS writing_documents (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL,
+  parent_id         TEXT,
+  kind              TEXT NOT NULL DEFAULT 'document',
+  template          TEXT NOT NULL DEFAULT 'freeform',
+  title             TEXT NOT NULL,
+  icon              TEXT,
+  content           TEXT,
+  content_format    TEXT DEFAULT 'tiptap',
+  chapter_plan_id   TEXT,
+  draft_id          TEXT,
+  sort_order        INTEGER NOT NULL DEFAULT 0,
+  template_fields_json TEXT,
+  word_count        INTEGER DEFAULT 0,
+  tags_json         TEXT NOT NULL DEFAULT '[]',
+  status            TEXT NOT NULL DEFAULT 'active',
+  version           INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at        TEXT,
+  FOREIGN KEY (project_id) REFERENCES writing_projects(id),
+  FOREIGN KEY (parent_id) REFERENCES writing_documents(id)
+);
+CREATE INDEX IF NOT EXISTS idx_wdoc_project ON writing_documents(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_wdoc_parent ON writing_documents(parent_id, sort_order);
 `;
 
 // =============================================================================
@@ -662,6 +859,15 @@ const PREFIX = {
   // W12 §3.1 组合初始化：工作台布局 + 项目级偏好容器（均与项目 1:1）
   workspace_layout: 'wlay',
   project_preference: 'wpref',
+  // Phase 12：正文 / 风格 / 修订 / Retcon视图 / 导入
+  prose_document:    'wpd',
+  prose_block:       'wpb',
+  style_guide:       'wsg',
+  style_example:     'wsty',
+  banned_expression: 'wbe',
+  revision_record:   'wrev',
+  retcon_report:     'wrr',
+  import_batch:      'wib',
 } as const;
 
 function makeId(prefix: string): string {
@@ -1292,6 +1498,18 @@ export class SQLiteWritingStore {
       'writing_reader_audiences',
       'writing_foreshadowing_plans',
       'writing_reveal_plans',
+      // Phase 12（W.29-W.36）：正文/风格/修订/Retcon视图/导入，生命周期跟随项目。
+      // 注意：writing_prose_blocks 无 project_id（通过 document_id 关联），不在此列；
+      // 它随 writing_prose_documents 级联由 ProseService 显式清理。
+      'writing_prose_documents',
+      'writing_style_guides',
+      'writing_style_examples',
+      'writing_banned_expressions',
+      'writing_revision_records',
+      'writing_retcon_reports',
+      'writing_import_batches',
+      // 起草工作台（W.37）：设定集文档树，生命周期跟随项目。
+      'writing_documents',
     ];
     // 注意：writing_audit_logs 不级联删除，审计记录永久保留
     // P1-2 修复：全部级联软删除包裹在单一事务内，保证原子性（§7.11.1）
@@ -3065,5 +3283,581 @@ export class SQLiteWritingStore {
 
   listRevealMilestones(revealPlanId: string): RevealMilestone[] {
     return this.db.prepare('SELECT * FROM writing_reveal_milestones WHERE reveal_plan_id = ?').all(revealPlanId) as RevealMilestone[];
+  }
+
+  // ===========================================================================
+  // 起草工作台：设定集文档树 CRUD（W.37 writing_documents）
+  // ===========================================================================
+
+  /** 创建文档节点。sortOrder 由调用方决定（通常取父节点下 max+1）。 */
+  createDocument(projectId: string, input: {
+    parentId: string | null; kind: WritingDocumentKind;
+    template?: WritingDocumentTemplate; title: string; icon?: string;
+    content?: string; contentFormat?: DocumentContentFormat;
+    sortOrder: number; tags?: string[];
+    templateFields?: Record<string, string>;
+    chapterPlanId?: string; draftId?: string;
+    wordCount?: number;
+  }): WritingDocument {
+    const id = `wdoc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_documents
+       (id, project_id, parent_id, kind, template, title, icon, content, content_format,
+        chapter_plan_id, draft_id, sort_order, template_fields_json, tags_json, word_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id, projectId, input.parentId, input.kind,
+      input.template ?? 'freeform', input.title, input.icon ?? null,
+      input.content ?? null, input.contentFormat ?? 'tiptap',
+      input.chapterPlanId ?? null, input.draftId ?? null,
+      input.sortOrder,
+      input.templateFields ? JSON.stringify(input.templateFields) : null,
+      JSON.stringify(input.tags ?? []),
+      input.wordCount ?? 0,
+    );
+    return this.getDocument(id)!;
+  }
+
+  getDocument(id: string): WritingDocument | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_documents WHERE id = ? AND deleted_at IS NULL'
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToDocument(row) : undefined;
+  }
+
+  /** 列出项目下全部文档（一次拉全树，由前端组装；项目级文档量通常不大）。 */
+  listDocuments(projectId: string): WritingDocument[] {
+    return (this.db.prepare(
+      'SELECT * FROM writing_documents WHERE project_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC'
+    ).all(projectId) as Record<string, unknown>[]).map(r => this.rowToDocument(r));
+  }
+
+  /** 仅列出某父节点下的直接子节点（用于增量加载或拖拽落点校验）。 */
+  listDocumentsByParent(projectId: string, parentId: string | null): WritingDocument[] {
+    if (parentId === null) {
+      return (this.db.prepare(
+        'SELECT * FROM writing_documents WHERE project_id = ? AND parent_id IS NULL AND deleted_at IS NULL ORDER BY sort_order ASC'
+      ).all(projectId) as Record<string, unknown>[]).map(r => this.rowToDocument(r));
+    }
+    return (this.db.prepare(
+      'SELECT * FROM writing_documents WHERE project_id = ? AND parent_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC'
+    ).all(projectId, parentId) as Record<string, unknown>[]).map(r => this.rowToDocument(r));
+  }
+
+  /**
+   * 更新文档（乐观锁）。
+   * 覆盖更新：title/icon/content/contentFormat/sortOrder/parentId/tags/templateFields。
+   * 改 parentId 不在此做循环校验（由 DocumentService 层负责防循环）。
+   */
+  updateDocument(id: string, expectedVersion: number, updates: Partial<{
+    parentId: string | null; title: string; icon: string;
+    content: string; contentFormat: DocumentContentFormat;
+    sortOrder: number; tags: string[];
+    templateFields: Record<string, string>; wordCount: number;
+    status: WritingDocumentStatus;
+  }>): { newVersion: number } {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.parentId !== undefined) { parts.push('parent_id = ?'); vals.push(updates.parentId); }
+    if (updates.title !== undefined) { parts.push('title = ?'); vals.push(updates.title); }
+    if (updates.icon !== undefined) { parts.push('icon = ?'); vals.push(updates.icon); }
+    if (updates.content !== undefined) { parts.push('content = ?'); vals.push(updates.content); }
+    if (updates.contentFormat !== undefined) { parts.push('content_format = ?'); vals.push(updates.contentFormat); }
+    if (updates.sortOrder !== undefined) { parts.push('sort_order = ?'); vals.push(updates.sortOrder); }
+    if (updates.tags !== undefined) { parts.push('tags_json = ?'); vals.push(JSON.stringify(updates.tags)); }
+    if (updates.templateFields !== undefined) {
+      parts.push('template_fields_json = ?');
+      vals.push(updates.templateFields ? JSON.stringify(updates.templateFields) : null);
+    }
+    if (updates.wordCount !== undefined) { parts.push('word_count = ?'); vals.push(updates.wordCount); }
+    if (updates.status !== undefined) { parts.push('status = ?'); vals.push(updates.status); }
+    if (parts.length === 0) return { newVersion: expectedVersion };
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id, expectedVersion);
+    const result = this.db.prepare(`UPDATE writing_documents SET ${parts.join(', ')} WHERE id = ? AND version = ?`).run(...vals);
+    if (result.changes === 0) {
+      const row = this.db.prepare('SELECT version FROM writing_documents WHERE id = ?').get(id) as { version: number } | undefined;
+      if (!row) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `文档不存在: ${id}`, { objectType: 'document', objectId: id });
+      throw new WritingError(WritingErrorCode.VERSION_CONFLICT, `文档版本冲突: 期望 ${expectedVersion}，实际 ${row.version}`, { expected: expectedVersion, actual: row.version });
+    }
+    return { newVersion: expectedVersion + 1 };
+  }
+
+  /** 软删除（归档）单个文档节点。子节点的级联归档由 DocumentService 负责。 */
+  archiveDocument(id: string): void {
+    this.db.prepare(
+      "UPDATE writing_documents SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL"
+    ).run(id);
+  }
+
+  /**
+   * 查询某节点全部后代 id（含多层，不含自身）。
+   * 用递归 CTE：anchor 取 parent_id = id 的直接子节点，再逐层向下展开。
+   * DocumentService.move 用它做防循环校验；archive 用它做级联归档。
+   */
+  listDescendantIds(id: string): string[] {
+    const rows = this.db.prepare(
+      `WITH RECURSIVE descendants(id) AS (
+         SELECT id FROM writing_documents WHERE parent_id = ? AND deleted_at IS NULL
+         UNION ALL
+         SELECT d.id FROM writing_documents d
+         JOIN descendants ON d.parent_id = descendants.id
+         WHERE d.deleted_at IS NULL
+       )
+       SELECT id FROM descendants`
+    ).all(id) as { id: string }[];
+    return rows.map(r => r.id);
+  }
+
+  private rowToDocument(row: Record<string, unknown>): WritingDocument {
+    return {
+      id: row['id'] as string,
+      projectId: row['project_id'] as string,
+      parentId: (row['parent_id'] as string) ?? null,
+      kind: row['kind'] as WritingDocumentKind,
+      template: row['template'] as WritingDocumentTemplate,
+      title: row['title'] as string,
+      icon: (row['icon'] as string) ?? undefined,
+      content: (row['content'] as string) ?? undefined,
+      contentFormat: (row['content_format'] as DocumentContentFormat) ?? undefined,
+      chapterPlanId: (row['chapter_plan_id'] as string) ?? undefined,
+      draftId: (row['draft_id'] as string) ?? undefined,
+      sortOrder: row['sort_order'] as number,
+      templateFields: row['template_fields_json']
+        ? safeParseJson(row['template_fields_json'] as string, row['id'] as string, 'template_fields') as Record<string, string>
+        : undefined,
+      wordCount: (row['word_count'] as number) ?? undefined,
+      tags: safeParseJson(row['tags_json'] as string, row['id'] as string, 'tags') as string[],
+      status: row['status'] as WritingDocumentStatus,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string,
+      updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 12 · 正文文档 / 正文块（§13.8）
+  // ===========================================================================
+
+  createProseDocument(projectId: string, input: { title: string; draftId?: string }): ProseDocument {
+    const id = makeId(PREFIX.prose_document);
+    const versionId = `wpdv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `INSERT INTO writing_prose_documents (id, project_id, title, version_id, draft_id) VALUES (?, ?, ?, ?, ?)`,
+    ).run(id, projectId, input.title, versionId, input.draftId ?? null);
+    return this.getProseDocument(id)!;
+  }
+
+  getProseDocument(id: string): ProseDocument | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_prose_documents WHERE id = ? AND deleted_at IS NULL',
+    ).get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToProseDocument(row) : undefined;
+  }
+
+  listProseDocuments(projectId: string): ProseDocument[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_prose_documents WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at',
+    ).all(projectId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToProseDocument(r));
+  }
+
+  updateProseDocument(id: string, updates: Partial<{ title: string; mode: ProseDocumentMode; draftId: string }>): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.title !== undefined) { parts.push('title = ?'); vals.push(updates.title); }
+    if (updates.mode !== undefined) { parts.push('mode = ?'); vals.push(updates.mode); }
+    if (updates.draftId !== undefined) { parts.push('draft_id = ?'); vals.push(updates.draftId); }
+    if (parts.length === 0) return;
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_prose_documents SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  /** 结构变更 bump versionId（正文锚点失效判断依据，§13.8） */
+  private bumpProseVersion(documentId: string): void {
+    const newVersionId = `wpdv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.db.prepare(
+      `UPDATE writing_prose_documents SET version_id = ?, version = version + 1, updated_at = datetime('now') WHERE id = ?`,
+    ).run(newVersionId, documentId);
+  }
+
+  getProseBlocks(documentId: string): ProseBlock[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_prose_blocks WHERE document_id = ? ORDER BY order_index',
+    ).all(documentId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToProseBlock(r));
+  }
+
+  addProseBlock(input: { documentId: string; kind: ProseBlockKind; text: string; sceneId?: string; sourceRefs?: string[] }): ProseBlock {
+    const id = makeId(PREFIX.prose_block);
+    const maxOrder = this.db.prepare(
+      'SELECT COALESCE(MAX(order_index), -1) AS m FROM writing_prose_blocks WHERE document_id = ?',
+    ).get(input.documentId) as { m: number };
+    const orderIndex = maxOrder.m + 1;
+    this.db.prepare(
+      `INSERT INTO writing_prose_blocks (id, document_id, kind, order_index, text, scene_id, source_refs_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, input.documentId, input.kind, orderIndex, input.text, input.sceneId ?? null, safeStringify(input.sourceRefs ?? []));
+    this.bumpProseVersion(input.documentId);
+    const row = this.db.prepare('SELECT * FROM writing_prose_blocks WHERE id = ?').get(id) as Record<string, unknown>;
+    return this.rowToProseBlock(row);
+  }
+
+  updateProseBlock(id: string, updates: Partial<{ kind: ProseBlockKind; text: string; sceneId: string }>): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.kind !== undefined) { parts.push('kind = ?'); vals.push(updates.kind); }
+    if (updates.text !== undefined) { parts.push('text = ?'); vals.push(updates.text); }
+    if (updates.sceneId !== undefined) { parts.push('scene_id = ?'); vals.push(updates.sceneId); }
+    if (parts.length === 0) return;
+    parts.push("updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_prose_blocks SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+    const docRow = this.db.prepare('SELECT document_id FROM writing_prose_blocks WHERE id = ?').get(id) as { document_id: string } | undefined;
+    if (docRow) this.bumpProseVersion(docRow.document_id);
+  }
+
+  /** 移动块到新位置（reorder）。targetOrderIndex 为插入后的目标序号。 */
+  moveProseBlock(id: string, targetOrderIndex: number): void {
+    const docRow = this.db.prepare('SELECT document_id FROM writing_prose_blocks WHERE id = ?').get(id) as { document_id: string } | undefined;
+    if (!docRow) return;
+    const documentId = docRow.document_id;
+    const txn = this.db.transaction(() => {
+      const blocks = this.getProseBlocks(documentId);
+      const moved = blocks.find(b => b.id === id);
+      if (!moved) return;
+      const rest = blocks.filter(b => b.id !== id);
+      const clamped = Math.max(0, Math.min(targetOrderIndex, rest.length));
+      rest.splice(clamped, 0, moved);
+      rest.forEach((b, idx) => {
+        this.db.prepare("UPDATE writing_prose_blocks SET order_index = ?, updated_at = datetime('now') WHERE id = ?").run(idx, b.id);
+      });
+      this.bumpProseVersion(documentId);
+    });
+    txn();
+  }
+
+  deleteProseBlock(id: string): void {
+    const docRow = this.db.prepare('SELECT document_id FROM writing_prose_blocks WHERE id = ?').get(id) as { document_id: string } | undefined;
+    if (!docRow) return;
+    const documentId = docRow.document_id;
+    const txn = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM writing_prose_blocks WHERE id = ?').run(id);
+      const blocks = this.getProseBlocks(documentId);
+      blocks.forEach((b, idx) => {
+        this.db.prepare('UPDATE writing_prose_blocks SET order_index = ? WHERE id = ?').run(idx, b.id);
+      });
+      this.bumpProseVersion(documentId);
+    });
+    txn();
+  }
+
+  private rowToProseDocument(row: Record<string, unknown>): ProseDocument {
+    return {
+      id: row['id'] as string,
+      projectId: row['project_id'] as string,
+      title: row['title'] as string,
+      versionId: row['version_id'] as string,
+      mode: row['mode'] as ProseDocumentMode,
+      draftId: (row['draft_id'] as string) ?? undefined,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string,
+      updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
+    };
+  }
+
+  private rowToProseBlock(row: Record<string, unknown>): ProseBlock {
+    return {
+      id: row['id'] as string,
+      documentId: row['document_id'] as string,
+      kind: row['kind'] as ProseBlockKind,
+      orderIndex: row['order_index'] as number,
+      text: row['text'] as string,
+      sceneId: (row['scene_id'] as string) ?? undefined,
+      sourceRefs: safeParseJson<string[]>(row['source_refs_json'] as string, row['id'] as string, 'source_refs_json'),
+      createdAt: row['created_at'] as string,
+      updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 12 · 风格指南 / 示例 / 禁用表达（§18）
+  // ===========================================================================
+
+  getOrCreateDefaultStyleGuide(projectId: string): StyleGuide {
+    const row = this.db.prepare(
+      'SELECT * FROM writing_style_guides WHERE project_id = ? AND scope = ? AND status != ? AND deleted_at IS NULL',
+    ).get(projectId, 'default', 'archived') as Record<string, unknown> | undefined;
+    if (row) return this.rowToStyleGuide(row);
+    const id = makeId(PREFIX.style_guide);
+    this.db.prepare(
+      `INSERT INTO writing_style_guides (id, project_id, name, scope, status) VALUES (?, ?, '默认风格', 'default', 'draft')`,
+    ).run(id, projectId);
+    return this.rowToStyleGuide(this.db.prepare('SELECT * FROM writing_style_guides WHERE id = ?').get(id) as Record<string, unknown>);
+  }
+
+  getStyleGuide(id: string): StyleGuide | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_style_guides WHERE id = ? AND deleted_at IS NULL').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToStyleGuide(row) : undefined;
+  }
+
+  listStyleGuides(projectId: string): StyleGuide[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_style_guides WHERE project_id = ? AND deleted_at IS NULL ORDER BY scope, created_at',
+    ).all(projectId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToStyleGuide(r));
+  }
+
+  updateStyleGuide(id: string, updates: Partial<{
+    name: string; narrativePerson: NarrativePerson; narrativeDistance: NarrativeDistance;
+    pacingPreference: PacingPreference; descriptionPreference: DescriptionPreference[];
+    bannedExpressionIds: string[]; exampleIds: string[]; status: StyleGuideStatus; scopeNote: string;
+  }>): void {
+    const parts: string[] = []; const vals: unknown[] = [];
+    if (updates.name !== undefined) { parts.push('name = ?'); vals.push(updates.name); }
+    if (updates.narrativePerson !== undefined) { parts.push('narrative_person = ?'); vals.push(updates.narrativePerson); }
+    if (updates.narrativeDistance !== undefined) { parts.push('narrative_distance = ?'); vals.push(updates.narrativeDistance); }
+    if (updates.pacingPreference !== undefined) { parts.push('pacing_preference = ?'); vals.push(updates.pacingPreference); }
+    if (updates.descriptionPreference !== undefined) { parts.push('description_preference_json = ?'); vals.push(safeStringify(updates.descriptionPreference)); }
+    if (updates.bannedExpressionIds !== undefined) { parts.push('banned_expression_ids_json = ?'); vals.push(safeStringify(updates.bannedExpressionIds)); }
+    if (updates.exampleIds !== undefined) { parts.push('example_ids_json = ?'); vals.push(safeStringify(updates.exampleIds)); }
+    if (updates.status !== undefined) { parts.push('status = ?'); vals.push(updates.status); }
+    if (updates.scopeNote !== undefined) { parts.push('scope_note = ?'); vals.push(updates.scopeNote); }
+    if (parts.length === 0) return;
+    parts.push("version = version + 1", "updated_at = datetime('now')");
+    vals.push(id);
+    this.db.prepare(`UPDATE writing_style_guides SET ${parts.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  createStyleExample(projectId: string, input: { kind: StyleExampleKind; text: string; note?: string; sourceBlockId?: string }): StyleExample {
+    const id = makeId(PREFIX.style_example);
+    this.db.prepare(
+      `INSERT INTO writing_style_examples (id, project_id, kind, text, note, source_block_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, projectId, input.kind, input.text, input.note ?? null, input.sourceBlockId ?? null);
+    return this.rowToStyleExample(this.db.prepare('SELECT * FROM writing_style_examples WHERE id = ?').get(id) as Record<string, unknown>);
+  }
+
+  listStyleExamples(projectId: string): StyleExample[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_style_examples WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at',
+    ).all(projectId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToStyleExample(r));
+  }
+
+  createBannedExpression(projectId: string, input: { pattern: string; reason?: string; category?: string }): BannedExpression {
+    const id = makeId(PREFIX.banned_expression);
+    this.db.prepare(
+      `INSERT INTO writing_banned_expressions (id, project_id, pattern, reason, category) VALUES (?, ?, ?, ?, ?)`,
+    ).run(id, projectId, input.pattern, input.reason ?? null, input.category ?? null);
+    return this.rowToBannedExpression(this.db.prepare('SELECT * FROM writing_banned_expressions WHERE id = ?').get(id) as Record<string, unknown>);
+  }
+
+  listBannedExpressions(projectId: string): BannedExpression[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_banned_expressions WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at',
+    ).all(projectId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToBannedExpression(r));
+  }
+
+  private rowToStyleGuide(row: Record<string, unknown>): StyleGuide {
+    const id = row['id'] as string;
+    return {
+      id, projectId: row['project_id'] as string, name: row['name'] as string,
+      narrativePerson: row['narrative_person'] as NarrativePerson,
+      narrativeDistance: row['narrative_distance'] as NarrativeDistance,
+      pacingPreference: row['pacing_preference'] as PacingPreference,
+      descriptionPreference: safeParseJson<DescriptionPreference[]>(row['description_preference_json'] as string, id, 'description_preference_json'),
+      bannedExpressionIds: safeParseJson<string[]>(row['banned_expression_ids_json'] as string, id, 'banned_expression_ids_json'),
+      exampleIds: safeParseJson<string[]>(row['example_ids_json'] as string, id, 'example_ids_json'),
+      scope: row['scope'] as 'default' | 'variant',
+      scopeNote: (row['scope_note'] as string) ?? undefined,
+      status: row['status'] as StyleGuideStatus,
+      version: row['version'] as number,
+      createdAt: row['created_at'] as string,
+      updatedAt: row['updated_at'] as string,
+      deletedAt: (row['deleted_at'] as string) ?? undefined,
+    };
+  }
+
+  private rowToStyleExample(row: Record<string, unknown>): StyleExample {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      kind: row['kind'] as StyleExampleKind, text: row['text'] as string,
+      note: (row['note'] as string) ?? undefined,
+      sourceBlockId: (row['source_block_id'] as string) ?? undefined,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  private rowToBannedExpression(row: Record<string, unknown>): BannedExpression {
+    return {
+      id: row['id'] as string, projectId: row['project_id'] as string,
+      pattern: row['pattern'] as string,
+      reason: (row['reason'] as string) ?? undefined,
+      category: (row['category'] as string) ?? undefined,
+      createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 12 · 修订记录（§19.1）
+  // ===========================================================================
+
+  createRevisionRecord(projectId: string, input: {
+    targetType: RevisionTargetType; targetId: string; action: RevisionAction; summary: string;
+    beforeSnapshot?: Record<string, unknown>; afterSnapshot?: Record<string, unknown>;
+    versionGroupId?: string; operator?: 'author' | 'agent';
+  }): RevisionRecord {
+    const id = makeId(PREFIX.revision_record);
+    const versionGroupId = input.versionGroupId ?? `${input.targetType}_${input.targetId}`;
+    this.db.prepare(
+      `INSERT INTO writing_revision_records (id, project_id, target_type, target_id, action, summary, before_snapshot_json, after_snapshot_json, version_group_id, operator) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, projectId, input.targetType, input.targetId, input.action, input.summary,
+      input.beforeSnapshot ? safeStringify(input.beforeSnapshot) : null,
+      input.afterSnapshot ? safeStringify(input.afterSnapshot) : null,
+      versionGroupId, input.operator ?? 'author');
+    return this.rowToRevisionRecord(this.db.prepare('SELECT * FROM writing_revision_records WHERE id = ?').get(id) as Record<string, unknown>);
+  }
+
+  listRevisionsByTarget(projectId: string, targetType: RevisionTargetType, targetId: string): RevisionRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_revision_records WHERE project_id = ? AND target_type = ? AND target_id = ? ORDER BY created_at DESC',
+    ).all(projectId, targetType, targetId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToRevisionRecord(r));
+  }
+
+  listRevisionsByGroup(versionGroupId: string): RevisionRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_revision_records WHERE version_group_id = ? ORDER BY created_at DESC',
+    ).all(versionGroupId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToRevisionRecord(r));
+  }
+
+  getRevisionRecord(id: string): RevisionRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_revision_records WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToRevisionRecord(row) : undefined;
+  }
+
+  private rowToRevisionRecord(row: Record<string, unknown>): RevisionRecord {
+    const id = row['id'] as string;
+    return {
+      id, projectId: row['project_id'] as string,
+      targetType: row['target_type'] as RevisionTargetType,
+      targetId: row['target_id'] as string,
+      action: row['action'] as RevisionAction,
+      summary: row['summary'] as string,
+      beforeSnapshot: row['before_snapshot_json'] ? safeParseJson(row['before_snapshot_json'] as string, id, 'before_snapshot_json') : undefined,
+      afterSnapshot: row['after_snapshot_json'] ? safeParseJson(row['after_snapshot_json'] as string, id, 'after_snapshot_json') : undefined,
+      versionGroupId: row['version_group_id'] as string,
+      operator: row['operator'] as 'author' | 'agent',
+      createdAt: row['created_at'] as string,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 12 · Retcon 影响报告（§10.5/§19.4）
+  // ===========================================================================
+
+  createRetconReport(projectId: string, input: {
+    retconProposalId: string; affectedNodes: RetconAffectedNode[];
+    affectedEdges: RetconAffectedEdge[]; recheckList: WritingArtifactRecheckItem[]; summary: string;
+  }): RetconImpactReport {
+    const id = makeId(PREFIX.retcon_report);
+    this.db.prepare(
+      `INSERT INTO writing_retcon_reports (id, project_id, retcon_proposal_id, affected_nodes_json, affected_edges_json, recheck_list_json, summary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, projectId, input.retconProposalId,
+      safeStringify(input.affectedNodes), safeStringify(input.affectedEdges),
+      safeStringify(input.recheckList), input.summary);
+    return this.rowToRetconReport(this.db.prepare('SELECT * FROM writing_retcon_reports WHERE id = ?').get(id) as Record<string, unknown>);
+  }
+
+  getRetconReport(id: string): RetconImpactReport | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_retcon_reports WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToRetconReport(row) : undefined;
+  }
+
+  getRetconReportByProposal(retconProposalId: string): RetconImpactReport | undefined {
+    // rowid 是 SQLite 隐式自增，保证同 created_at 毫秒时按插入顺序取最新（id 时间戳在并发下不可靠）
+    const row = this.db.prepare(
+      'SELECT * FROM writing_retcon_reports WHERE retcon_proposal_id = ? ORDER BY rowid DESC LIMIT 1',
+    ).get(retconProposalId) as Record<string, unknown> | undefined;
+    return row ? this.rowToRetconReport(row) : undefined;
+  }
+
+  listRetconReports(projectId: string): RetconImpactReport[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_retcon_reports WHERE project_id = ? ORDER BY created_at DESC',
+    ).all(projectId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToRetconReport(r));
+  }
+
+  updateRetconReportStatus(id: string, status: RetconReportStatus): void {
+    if (status === 'confirmed' || status === 'rejected') {
+      this.db.prepare("UPDATE writing_retcon_reports SET status = ?, confirmed_at = datetime('now') WHERE id = ?").run(status, id);
+    } else {
+      this.db.prepare('UPDATE writing_retcon_reports SET status = ? WHERE id = ?').run(status, id);
+    }
+  }
+
+  private rowToRetconReport(row: Record<string, unknown>): RetconImpactReport {
+    const id = row['id'] as string;
+    return {
+      id, projectId: row['project_id'] as string,
+      retconProposalId: row['retcon_proposal_id'] as string,
+      status: row['status'] as RetconReportStatus,
+      affectedNodes: safeParseJson<RetconAffectedNode[]>(row['affected_nodes_json'] as string, id, 'affected_nodes_json'),
+      affectedEdges: safeParseJson<RetconAffectedEdge[]>(row['affected_edges_json'] as string, id, 'affected_edges_json'),
+      recheckList: safeParseJson<WritingArtifactRecheckItem[]>(row['recheck_list_json'] as string, id, 'recheck_list_json'),
+      summary: row['summary'] as string,
+      createdAt: row['created_at'] as string,
+      confirmedAt: (row['confirmed_at'] as string) ?? undefined,
+    };
+  }
+
+  // ===========================================================================
+  // Phase 12 · 导入批次（§20.1）
+  // ===========================================================================
+
+  createImportBatch(projectId: string, input: {
+    sourceFilename?: string; importType: ImportType; rawSnapshot: string;
+    metadata?: Record<string, unknown>;
+  }): ImportBatch {
+    const id = makeId(PREFIX.import_batch);
+    this.db.prepare(
+      `INSERT INTO writing_import_batches (id, project_id, source_filename, import_type, status, raw_snapshot, metadata_json) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+    ).run(id, projectId, input.sourceFilename ?? null, input.importType, input.rawSnapshot, safeStringify(input.metadata ?? {}));
+    return this.rowToImportBatch(this.db.prepare('SELECT * FROM writing_import_batches WHERE id = ?').get(id) as Record<string, unknown>);
+  }
+
+  getImportBatch(id: string): ImportBatch | undefined {
+    const row = this.db.prepare('SELECT * FROM writing_import_batches WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.rowToImportBatch(row) : undefined;
+  }
+
+  listImportBatches(projectId: string): ImportBatch[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM writing_import_batches WHERE project_id = ? ORDER BY created_at DESC',
+    ).all(projectId) as Record<string, unknown>[];
+    return rows.map(r => this.rowToImportBatch(r));
+  }
+
+  completeImportBatch(id: string, status: ImportBatchStatus, generatedDocumentIds: string[]): void {
+    this.db.prepare(
+      `UPDATE writing_import_batches SET status = ?, generated_document_ids_json = ?, completed_at = datetime('now') WHERE id = ?`,
+    ).run(status, safeStringify(generatedDocumentIds), id);
+  }
+
+  private rowToImportBatch(row: Record<string, unknown>): ImportBatch {
+    const id = row['id'] as string;
+    return {
+      id, projectId: row['project_id'] as string,
+      sourceFilename: (row['source_filename'] as string) ?? undefined,
+      importType: row['import_type'] as ImportType,
+      status: row['status'] as ImportBatchStatus,
+      rawSnapshot: row['raw_snapshot'] as string,
+      metadata: safeParseJson(row['metadata_json'] as string, id, 'metadata_json'),
+      generatedDocumentIds: safeParseJson<string[]>(row['generated_document_ids_json'] as string, id, 'generated_document_ids_json'),
+      createdAt: row['created_at'] as string,
+      completedAt: (row['completed_at'] as string) ?? undefined,
+    };
   }
 }

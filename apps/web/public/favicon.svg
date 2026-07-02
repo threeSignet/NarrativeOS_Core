@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2BB6C8" stroke-width="1.8" stroke-linejoin="round">
+  <!-- NarrativeOS 浏览器标签图标——与 TitleBar 应用图标同源同几何 -->
+  <!-- 唯一差异：currentColor（跟随主题）→ 固定 #2BB6C8（SVG favicon 不支持 currentColor） -->
+  <!-- 外层作用域：主世界 -->
+  <rect x="3" y="3" width="18" height="18" rx="2.5" />
+  <!-- 中层作用域：副本/梦境/异世界（嵌套） -->
+  <rect x="7" y="7" width="10" height="10" rx="1.5" />
+  <!-- 内核：世界状态点（确定性真相） -->
+  <circle cx="12" cy="12" r="1.8" fill="#2BB6C8" stroke="none" />
+</svg>

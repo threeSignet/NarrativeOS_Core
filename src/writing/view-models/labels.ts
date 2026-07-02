@@ -40,6 +40,7 @@ const DRAFT_STATUS_LABELS: Record<DraftStatus, string> = {
   ready_to_simulate: '可推演',
   simulated: '已推演',
   committed: '已提交',
+  revising: '追改中',
   archived: '已归档',
   error: '出错',
 };

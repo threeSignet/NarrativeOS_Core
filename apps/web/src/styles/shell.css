@@ -1,0 +1,265 @@
+/* =============================================================================
+ * App Shell —— VS Code 式五区域网格（标题栏 + 活动栏 + 侧栏 + 主区 + 状态栏）
+ * 从 narrativeos-ide 四列扩展为含顶部标题栏的布局。
+ * 右侧 Panel + 底部抽屉为预留（本轮空），架构上已留好 grid-area。
+ * ============================================================================= */
+
+.app {
+  display: grid;
+  /* 列宽用 CSS 变量驱动，避免 .hide-sidebar 与 .hide-panel 两条规则各自
+     重写整条 grid-template-columns 而互相覆盖（曾导致点"显示侧栏"无效）。 */
+  grid-template-columns: var(--w-activity) var(--col-sidebar) 1fr var(--col-panel);
+  grid-template-rows: var(--h-titlebar) 1fr var(--h-statusbar);
+  grid-template-areas:
+    "titlebar  titlebar  titlebar  titlebar"
+    "activity  sidebar   main      panel"
+    "statusbar statusbar statusbar statusbar";
+  height: 100vh;
+  transition: grid-template-columns var(--t);
+  /* 默认列宽：侧栏显、右面板隐（panel 为预留空区） */
+  --col-sidebar: var(--w-sidebar);
+  --col-panel: 0px;
+}
+.app.hide-sidebar { --col-sidebar: 0px; }
+.app.hide-panel   { --col-panel: 0px; }
+
+.titlebar  { grid-area: titlebar; }
+.activity-bar { grid-area: activity; }
+.sidebar   { grid-area: sidebar; }
+.main      { grid-area: main; }
+.panel     { grid-area: panel; }
+.status-bar { grid-area: statusbar; }
+
+/* ===== 标题栏（顶部：图标 + 菜单预留 + 命令中心预留 + 功能按钮预留） ===== */
+.titlebar {
+  display: flex; align-items: center;
+  height: var(--h-titlebar);
+  padding: 0 var(--sp-2);
+  background: var(--titlebar-bg);
+  border-bottom: 1px solid var(--border);
+  gap: var(--sp-2);
+  -webkit-app-region: drag; /* 未来 Tauri 可拖动 */
+  user-select: none;
+}
+.titlebar-app-icon {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.titlebar-app-icon .ico { width: 18px; height: 18px; }
+.titlebar-project {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  padding: 0 var(--sp-2);
+  -webkit-app-region: no-drag;
+}
+.titlebar-project .cur { color: var(--text); font-weight: 500; }
+.titlebar-center {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  gap: var(--sp-2);
+}
+/* 命令中心占位（未来 Cmd+K 输入框） */
+.titlebar-cmd-placeholder {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  padding: 3px 10px;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+}
+.titlebar-right {
+  display: flex; align-items: center; gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+/* ===== 活动栏（最左图标轨） ===== */
+.activity-bar {
+  background: var(--activity-bg);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center;
+  /* 顶部 padding 为 0：首个按钮紧贴标题栏下边界（VSCode 行为）；底部保留呼吸空间 */
+  padding: 0 0 var(--sp-2);
+  overflow: hidden;
+}
+.activity-brand {
+  width: 28px; height: 28px;
+  margin-bottom: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--accent); color: var(--accent-fg);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-md);
+  flex-shrink: 0;
+}
+.activity-items { display: flex; flex-direction: column; gap: 2px; flex: 1; width: 100%; align-items: center; }
+/* activity-bottom 补 width:100%：此前缺失导致子按钮 width:100% 无撑满参照，
+   按钮按 svg 内容收缩成 22×44 竖长方形（顶部按钮因父级有 width:100% 是方形） */
+.activity-bottom { display: flex; flex-direction: column; gap: 2px; width: 100%; align-items: center; }
+
+.activity-btn {
+  position: relative; width: 100%; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); border-radius: 0;
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.activity-btn:hover { color: var(--text); background: var(--bg-3); }
+.activity-btn .ico { width: 22px; height: 22px; }
+.activity-btn.is-active { color: var(--text); }
+.activity-btn.is-active::before {
+  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 2px; background: var(--accent); border-radius: 0 2px 2px 0;
+}
+.activity-btn::after {
+  content: attr(data-tip);
+  position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border-2);
+  padding: 4px 8px; border-radius: var(--r-sm);
+  font-size: var(--fs-sm); white-space: nowrap;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--t-fast); z-index: 50; box-shadow: var(--shadow-md);
+}
+.activity-btn:hover::after { opacity: 1; }
+
+/* ===== 侧栏 / 右侧面板容器 ===== */
+.sidebar, .panel {
+  background: var(--bg-2);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+/* VS Code 式：侧栏右边一条细线分隔主编辑区；右面板左边一条细线。
+   用 border-2（比 border 略亮）保证深色背景下清晰可见。 */
+.sidebar { border-right: 1px solid var(--border-2); }
+.panel { border-left: 1px solid var(--border-2); }
+
+.side-head {
+  height: var(--h-main-header); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.side-title {
+  font-size: var(--fs-xs); font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-2);
+}
+.side-actions { display: flex; gap: 2px; }
+.icon-btn {
+  width: 24px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); border-radius: var(--r-sm);
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.icon-btn:hover { color: var(--text); background: var(--bg-3); }
+.icon-btn .ico { width: 15px; height: 15px; }
+
+.side-body { flex: 1; overflow-y: auto; }
+
+/* 侧栏搜索框 */
+.side-search { margin: var(--sp-2) var(--sp-2) var(--sp-1); position: relative; }
+.side-search input {
+  width: 100%; background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 5px 8px 5px 26px; font-size: var(--fs-sm); color: var(--text);
+}
+.side-search input:focus { outline: none; border-color: var(--border-focus); }
+.side-search .ico {
+  position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; color: var(--text-3);
+}
+
+.filter-row { display: flex; flex-wrap: wrap; gap: 4px; padding: var(--sp-2); }
+.filter-chip {
+  font-size: var(--fs-xs); padding: 2px 8px;
+  border-radius: var(--r-pill); border: 1px solid var(--border-2);
+  color: var(--text-2); background: transparent;
+  transition: all var(--t-fast);
+}
+.filter-chip:hover { color: var(--text); border-color: var(--text-3); }
+.filter-chip.is-on { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border); }
+
+.side-group {
+  font-size: var(--fs-xs); font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-3); padding: var(--sp-3) var(--sp-3) var(--sp-1);
+}
+
+/* ===== 主区（标签头 + 编辑器体） ===== */
+.main { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.main-head {
+  height: var(--h-main-header); flex-shrink: 0;
+  display: flex; align-items: center; gap: var(--sp-3);
+  /* 左 padding 为 0：标签页紧贴侧栏分割线（VSCode 行为）；右侧保留呼吸空间给 head-tools */
+  padding: 0 var(--sp-3) 0 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.breadcrumb { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); flex: 1; min-width: 0; }
+.breadcrumb .crumb { display: flex; align-items: center; gap: 4px; }
+.breadcrumb .crumb.cur { color: var(--text); }
+.breadcrumb .sep { color: var(--text-3); opacity: .6; }
+.main-head .head-tools { display: flex; align-items: center; gap: var(--sp-2); }
+.main-body { flex: 1; overflow-y: auto; position: relative; }
+
+/* ===== 状态栏 ===== */
+.status-bar {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  background: var(--statusbar-bg);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--text-3); overflow: hidden;
+}
+.status-bar .sb-item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.status-bar .sb-spacer { flex: 1; }
+.sb-pulse {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--success);
+  animation: sb-pulse 2.4s ease-in-out infinite;
+}
+.sb-pulse.is-busy { background: var(--warning); }
+@keyframes sb-pulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+
+/* ===== 通用组件 ===== */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.status-dot--committed { background: var(--st-committed); }
+.status-dot--candidate { background: var(--st-candidate); }
+.status-dot--draft     { background: var(--st-draft); }
+.status-dot--hint      { background: var(--st-hint); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 5px 12px; font-size: var(--fs-sm);
+  border-radius: var(--r-sm); border: 1px solid var(--border-2);
+  background: var(--bg-elev); color: var(--text);
+  transition: all var(--t-fast); white-space: nowrap;
+}
+.btn:hover { background: var(--bg-3); border-color: var(--text-3); }
+.btn .ico { width: 14px; height: 14px; }
+.btn--primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 500; }
+.btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn--ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn--ghost:hover { background: var(--bg-3); color: var(--text); border-color: transparent; }
+.btn--sm { padding: 3px 8px; font-size: var(--fs-xs); }
+
+.chip {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  padding: 1px 7px; border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.chip--accent { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-border); }
+
+/* 空状态 */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; gap: var(--sp-2);
+  color: var(--text-3); text-align: center; padding: var(--sp-6);
+}
+.empty-state .ico { width: 32px; height: 32px; opacity: .5; }
+.empty-state .es-title { font-size: var(--fs-md); color: var(--text-2); }
+.empty-state .es-desc { font-size: var(--fs-sm); }
+
+/* 通用图标尺寸 */
+.ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

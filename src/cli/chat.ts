@@ -34,6 +34,8 @@ import {
   handleChapter, handleScene, handleTimeline,
   handleGraph, handleRelation, handleAssociation,
   handleSpatial, handleMap,
+  handleReader, handleForeshadow, handleReveal,
+  handleProse, handleStyle, handleRevision, handleRetcon, handleImport, handleExport,
   type CliDeps,
 } from './command-handlers.js';
 // 项目选择器（每项目独立 db 文件）
@@ -202,12 +204,29 @@ const { ForeshadowingService } = await import('../writing/services/foreshadowing
 const readerService = new ReaderService(writingStore, auditService);
 const foreshadowingService = new ForeshadowingService(writingStore, auditService);
 
+// Phase 12：正文/风格/修订/Retcon视图/导入导出服务
+const { ProseService } = await import('../writing/services/prose-service.js');
+const { StyleService } = await import('../writing/services/style-service.js');
+const { RevisionService } = await import('../writing/services/revision-service.js');
+const { RetconViewService } = await import('../writing/services/retcon-view-service.js');
+const { ImportExportService } = await import('../writing/services/import-export-service.js');
+const proseService = new ProseService(writingStore, auditService);
+const styleService = new StyleService(writingStore, auditService);
+const revisionService = new RevisionService(writingStore, auditService);
+const retconViewService = new RetconViewService(writingStore, auditService);
+const importExportService = new ImportExportService(writingStore, auditService, proseService);
+
+// 起草工作台：设定集文档服务（不写 Core，纯写作层资料载体）
+const { DocumentService } = await import('../writing/services/document-service.js');
+const documentService = new DocumentService(writingStore, auditService);
+
 // 延迟注入实体检测服务到 ToolRouter（detect_entity_hints 工具需要；entityService/writingProjectId 此时就绪）
 toolRouter.setEntityService(entityService, writingProjectId);
 toolRouter.setGraphServices(relationService, graphService, writingProjectId);
 toolRouter.setSpatialServices(spatialService, spatialViewService, writingProjectId);
 toolRouter.setChapterSceneServices(chapterService, sceneService, timelineService, writingProjectId);
 toolRouter.setReaderForeshadowingServices(readerService, foreshadowingService, writingProjectId);
+toolRouter.setPhase12Services(proseService, styleService, retconViewService, importExportService, writingProjectId);
 
 // Agent
 const llm = new DeepSeekLLMClientAdapter();
@@ -307,7 +326,20 @@ const cliDeps: CliDeps = {
   relationService, graphService,
   // Phase 9：空间服务
   spatialService, spatialViewService,
-} as CliDeps & { relationService: unknown; graphService: unknown; spatialService: unknown; spatialViewService: unknown };
+  // Phase 10：章节/场景/时间线服务
+  chapterService, sceneService, timelineService,
+  // Phase 11：读者模型/伏笔服务
+  readerService, foreshadowingService,
+  // Phase 12：正文/风格/修订/Retcon/导入导出服务
+  proseService, styleService, revisionService, retconViewService, importExportService,
+} as CliDeps & {
+  relationService: unknown; graphService: unknown;
+  spatialService: unknown; spatialViewService: unknown;
+  chapterService: unknown; sceneService: unknown; timelineService: unknown;
+  readerService: unknown; foreshadowingService: unknown;
+  proseService: unknown; styleService: unknown; revisionService: unknown;
+  retconViewService: unknown; importExportService: unknown;
+};
 
 /** 把 handler 返回的输出行打印出来（统一 IO） */
 function printLines(lines: string[]): void {
@@ -381,6 +413,17 @@ async function handleCommand(input: string): Promise<boolean> {
     case '/chapter': printLines(await handleChapter(cliDeps, parsed)); return false;
     case '/scene': printLines(await handleScene(cliDeps, parsed)); return false;
     case '/timeline': printLines(await handleTimeline(cliDeps, parsed)); return false;
+    // Phase 11：读者模型/伏笔/揭示命令
+    case '/reader': printLines(await handleReader(cliDeps, parsed)); return false;
+    case '/foreshadow': printLines(await handleForeshadow(cliDeps, parsed)); return false;
+    case '/reveal': printLines(await handleReveal(cliDeps, parsed)); return false;
+    // Phase 12：正文/风格/修订/Retcon/导入导出命令
+    case '/prose': printLines(await handleProse(cliDeps, parsed)); return false;
+    case '/style': printLines(await handleStyle(cliDeps, parsed)); return false;
+    case '/revision': printLines(await handleRevision(cliDeps, parsed)); return false;
+    case '/retcon': printLines(await handleRetcon(cliDeps, parsed)); return false;
+    case '/import': printLines(await handleImport(cliDeps, parsed)); return false;
+    case '/export': printLines(await handleExport(cliDeps, parsed)); return false;
   }
 
   switch (cmd) {
@@ -433,6 +476,23 @@ async function handleCommand(input: string): Promise<boolean> {
     /scene list [--chapter <id>]     场景规划列表
     /scene add <chapterId> <标题> [--order N]  创建场景规划
     /timeline                   时间线视图
+
+  \x1b[1;33m读者/伏笔\x1b[0m
+    /reader [list|<受众id>]    读者群体与认知状态
+    /foreshadow                伏笔计划列表
+    /reveal                    揭示计划列表
+
+  \x1b[1;33m正文/风格/修订\x1b[0m
+    /prose [list|new <标题>|<id>]    正文文档（块级）
+    /prose add <id> <文本>           追加段落
+    /style                          风格指南（人称/距离/节奏/禁用表达）
+    /revision <类型> <id>           对象修订历史
+
+  \x1b[1;33mRetcon/导入导出\x1b[0m
+    /retcon [list|<报告id>]         Retcon 影响报告
+    /import <文件路径> [类型]       导入已有正文（不写 Core）
+    /import list                    导入批次列表
+    /export [范围] [文件路径]       导出项目数据为 JSON
 
   \x1b[1;33m系统\x1b[0m
     /state                 总览面板（计数 + 导航）

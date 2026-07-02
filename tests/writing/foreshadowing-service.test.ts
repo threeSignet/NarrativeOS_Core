@@ -73,6 +73,33 @@ describe('Phase 11 · ForeshadowingService', () => {
     expect(milestone.id).toMatch(/^wrm_/);
     expect(milestone.kind).toBe('first_hint');
   });
+
+  // A1 修复回归：list 入口存在且按项目隔离（此前 Tool 20 恒返回空数组）
+  it('listForeshadowingPlans 按项目返回伏笔计划', () => {
+    service.createForeshadowingPlan(ctx, { label: '伏笔一', kind: 'clue', targetReaderEffect: '好奇' });
+    service.createForeshadowingPlan(ctx, { label: '伏笔二', kind: 'suspense', targetReaderEffect: '紧张' });
+    const plans = service.listForeshadowingPlans(ctx);
+    expect(plans).toHaveLength(2);
+    expect(plans.map(p => p.label).sort()).toEqual(['伏笔一', '伏笔二']);
+  });
+
+  it('listRevealPlans 按项目返回揭示计划', () => {
+    service.createRevealPlan(ctx, { label: '揭示一', subjectDescription: '甲' });
+    service.createRevealPlan(ctx, { label: '揭示二', subjectDescription: '乙' });
+    const reveals = service.listRevealPlans(ctx);
+    expect(reveals).toHaveLength(2);
+  });
+
+  it('list 按项目隔离，不跨项目泄漏', () => {
+    service.createForeshadowingPlan(ctx, { label: '本项目伏笔', kind: 'clue', targetReaderEffect: '好奇' });
+    // 另一个项目
+    const otherProjectId = store.createProject('其他项目').id;
+    const otherCtx = makeRequestContext({ projectId: otherProjectId, trigger: 'author_action' });
+    service.createForeshadowingPlan(otherCtx, { label: '他项目伏笔', kind: 'clue', targetReaderEffect: '好奇' });
+    const plans = service.listForeshadowingPlans(ctx);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]!.label).toBe('本项目伏笔');
+  });
 });
 
 describe('Phase 11 · ReaderService', () => {

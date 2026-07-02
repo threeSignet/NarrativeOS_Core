@@ -40,4 +40,13 @@ export class ReaderService {
     this.store.updateReaderKnowledgeState(id, { state, confidence });
     this.audit.record(ctx, { action: 'update_reader_knowledge_state', targetType: 'reader_knowledge_state', targetId: id, result: 'success', detail: { state } });
   }
+
+  // --- 查询入口（Phase 12 A2：补齐 list 方法，供 CLI /reader 和后续工具消费） ---
+  listAudiences(ctx: WritingRequestContext): ReaderAudienceProfile[] {
+    return this.store.listReaderAudiences(ctx.projectId);
+  }
+
+  listKnowledgeStates(audienceId: string): ReaderKnowledgeState[] {
+    return this.store.listReaderKnowledgeStates(audienceId);
+  }
 }

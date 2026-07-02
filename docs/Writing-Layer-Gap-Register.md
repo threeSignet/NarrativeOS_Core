@@ -55,24 +55,34 @@
 
 ---
 
-## 各模块完成度基线（2026-06-25，Phase 9 交付后）
+## 各模块完成度基线（2026-07-02，Phase 12 交付后）
 
 | 写作层模块 | 完成度 | 主缺口 |
 |---|---|---|
-| 存储/DDL/类型/状态机 | ~100% | Phase 9 新增 3 空间表 + 状态机；softDeleteProject 级联覆盖 19 张表 |
+| 存储/DDL/类型/状态机 | ~100% | Phase 12 新增 8 表（W.29-W.36）；softDeleteProject 级联覆盖 36 张表 |
 | EntityService | ~95% | W4/W16/W17 已闭合；Phase 8 图谱化增强已闭合 |
-| IdeaService | ~85% | discard/restore 绕状态机 |
-| DraftService | ~95% | W7/W10-c/W15 已闭合 |
-| BlueprintService | ~90% | 空间类型管理（addSpatialNodeType/EdgeType）已闭合；类型提取脆弱待改进 |
+| IdeaService | ~90% | discard/restore 经核查已有状态机校验 |
+| DraftService | ~95% | W7/W10-c/W15 已闭合；Phase 12 增 revising 状态 |
+| BlueprintService | ~90% | 空间类型管理已闭合；类型提取脆弱待改进 |
 | ProjectService | ~95% | W10-b/W12 已闭合 |
 | RelationService | ~100% | Phase 8 全功能 |
-| SpatialService | ~100% | Phase 9 新增：节点/边/视图 CRUD + 状态机 + CoreBridge 集成 |
-| SpatialViewService | ~95% | Phase 9 新增：树状视图 + JSON 导出；parentEdgeTypeIds 参数化 |
+| SpatialService | ~100% | Phase 9：节点/边/视图 CRUD + 状态机 + CoreBridge 集成 |
+| SpatialViewService | ~95% | Phase 9：树状视图 + JSON 导出；parentEdgeTypeIds 参数化 |
 | GraphService | ~95% | Phase 8+9：buildGraphView 含空间投影 + spatial 模式过滤 |
 | CoreBridge | ~90% | Phase 8 四通道已闭合；SpatialService.registerToCore 接入 |
-| Agent §8 改造 | ~95% | Tool 12-15 全部接入（detect_relation/graph/spatial + get_graph/spatial） |
-| ViewModel/过滤 | ~90% | WRITING_TABLE_NAMES 覆盖 19 张表 |
-| Error 模型 | ~90% | tool-router 输入校验补全（Tool 14/15） |
-| 测试 | ~100% | Phase 9 新增 16 用例（spatial-service 12 + spatial-view-service 4） |
+| ChapterService | ~90% | Phase 10：创建/更新/状态推进/重排；§14.5 计划事件候选推迟 |
+| SceneService | ~90% | Phase 10：创建/更新/状态推进/重排 + 章节关联 |
+| TimelineService | ~85% | Phase 10：合并 Core 事件 + 章节/场景计划；§15.5/§15.7 推迟 |
+| ReaderService | ~85% | Phase 11：群体/认知状态管理；§16.5/§16.6 推迟 |
+| ForeshadowingService | ~85% | Phase 11：伏笔/暗示/回收/揭示计划；§17.5-17.7 推迟 |
+| **ProseService** | ~85% | Phase 12 新增：块级正文 CRUD + versionId bump + Markdown 切分；§13.3/§13.4 AI 反馈推迟 |
+| **StyleService** | ~80% | Phase 12 新增：风格指南/示例/禁用表达；§18.6 漂移检测（需 embedding）推迟 |
+| **RevisionService** | ~85% | Phase 12 新增：通用修订记录 + 版本组 + 恢复；§19.2 锚点自动迁移推迟 |
+| **RetconViewService** | ~85% | Phase 12 新增：影响报告投影 + 重检项；确认前只读 |
+| **ImportExportService** | ~85% | Phase 12 新增：导入切分 + 全量导出；§20.7 LLM 反推 Blueprint 推迟 |
+| Agent §8 改造 | ~95% | Tool 12-26 全部接入（Phase 8-11 + Phase 12 四只读工具） |
+| ViewModel/过滤 | ~95% | WRITING_TABLE_NAMES 覆盖 36 张表（Phase 9-12 补全） |
+| Error 模型 | ~90% | tool-router 输入校验补全 |
+| 测试 | ~100% | Phase 12 新增 42 用例（5 Service 测试）；全量 930 绿 |
 
-**总计**：Phase 9（Roadmap 6 项 + Code Review 3 项修复）→ ✅ 100% 完成。可进 Phase 10。
+**总计**：Phase 7-12 写作层全部完成。五大能力（正文/风格/修订/Retcon视图/导入导出）数据层 + 服务层 + CLI + Agent 工具闭环。AI 驱动能力（正文生成/风格检查/锚点迁移/Blueprint 反推）留给前端会话或后续 phase。后端可交付前端开发。

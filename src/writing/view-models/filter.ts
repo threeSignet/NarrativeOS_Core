@@ -52,6 +52,18 @@ const WRITING_TABLE_NAMES: ReadonlySet<string> = new Set([
   'writing_workspace_layouts', 'writing_project_preferences',
   // Phase 8（W.14/W.15/W.16）
   'writing_relations', 'writing_associations', 'writing_relation_hints',
+  // Phase 9（W.17/W.18/W.19）
+  'writing_spatial_nodes', 'writing_spatial_edges', 'writing_spatial_views',
+  // Phase 10（W.20/W.21）
+  'writing_chapter_plans', 'writing_scene_plans',
+  // Phase 11（W.22-W.28）
+  'writing_reader_audiences', 'writing_reader_knowledge_states',
+  'writing_foreshadowing_plans', 'writing_hint_occurrences', 'writing_payoff_plans',
+  'writing_reveal_plans', 'writing_reveal_milestones',
+  // Phase 12（W.29-W.36）
+  'writing_prose_documents', 'writing_prose_blocks',
+  'writing_style_guides', 'writing_style_examples', 'writing_banned_expressions',
+  'writing_revision_records', 'writing_retcon_reports', 'writing_import_batches',
 ]);
 
 /** 表名匹配时复用的标记正则（供违规 reason 文案引用） */

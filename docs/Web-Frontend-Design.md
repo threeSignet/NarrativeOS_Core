@@ -86,7 +86,7 @@ BFF 职责：
 
 核心矛盾：**信息密度** vs **沉浸感**。规划时需要密集信息，写作时需要零干扰。
 
-**采用模式切换布局**：不同工作场景使用不同的面板组合，通过顶栏模式切换器切换。不是固定三栏，而是按场景动态变化。
+**采用模式切换布局**：不同工作场景使用不同的面板组合，通过左侧活动栏（Activity Bar）切换。不是固定三栏，而是按场景动态变化。
 
 ### 3.2 区域定义
 
@@ -113,9 +113,9 @@ BFF 职责：
 | 图标 | 模块 ID | 名称 | 渲染组件 |
 |------|---------|------|---------|
 | 笔形 | draft | 写作 | DraftEditor（TipTap 编辑器） |
-| 大纲形 | outline | 大纲 | OutlineView（章节结构编辑） |
 | 网络形 | graph | 图谱 | GraphView（关系图谱可视化） |
-| 时钟形 | timeline | 时间线 | TimelineView（时间轴） |
+| 对勾形 | review | 审核 | ProposalReview（审核面板） |
+| 大纲形 | outline | 大纲 | OutlineView（章节结构编辑） |
 | 书本形 | knowledge | 知识 | KnowledgeView（知识可见性矩阵） |
 | 灯泡形 | idea | 灵感 | IdeaBoard（灵感卡片墙） |
 | 齿轮形 | settings | 设置 | ProjectSettings（项目配置） |
@@ -135,9 +135,9 @@ BFF 职责：
 ```typescript
 const viewMap: Record<ModuleId, Component> = {
   draft:     DraftEditor,
-  outline:   OutlineView,
   graph:     GraphView,
-  timeline:  TimelineView,
+  review:    ProposalReview,
+  outline:   OutlineView,
   knowledge: KnowledgeView,
   idea:      IdeaBoard,
   settings:  ProjectSettings,
@@ -145,9 +145,9 @@ const viewMap: Record<ModuleId, Component> = {
 
 const panelMap: Record<ModuleId, Component> = {
   draft:     ChapterList,
-  outline:   OutlineTree,
   graph:     EntityList,
-  timeline:  EventList,
+  review:    SubmissionSource,
+  outline:   OutlineTree,
   knowledge: EntityList,
   idea:      IdeaList,
   settings:  null,
@@ -193,7 +193,7 @@ const panelMap: Record<ModuleId, Component> = {
 ```
 
 特点：
-- 顶栏只保留作品名、章节、模式切换、主题和设置
+- 顶栏只保留作品名、面包屑、主题和设置
 - 左侧活动栏完全隐藏（鼠标移到左边缘时滑出）
 - 右侧栏完全隐藏
 - 编辑器内容区域居中，最大宽度 720px，两侧留白
@@ -414,17 +414,26 @@ const panelMap: Record<ModuleId, Component> = {
 
 ### 5.1 切换入口
 
-顶栏中央有模式切换器，显示当前模式名称和下拉菜单：
+**左侧活动栏（Activity Bar）**是唯一的模式切换入口。活动栏位于编辑器最左侧，包含 7 个模式图标按钮 + 1 个主题切换按钮：
 
 ```
-[写作 v]    点击展开：
-             - 写作（快捷键 1）
-             - 图谱（快捷键 2）
-             - 大纲（快捷键 3）
-             - 审核（快捷键 4）
-             - 知识（快捷键 5）
-             - 灵感（快捷键 6）
+[活动栏]
+[N]  ← 品牌标识
+✎    ← 写作（当前激活）
+⬡    ← 图谱
+✓    ← 审核
+☰    ← 大纲
+▦    ← 知识
+💡   ← 灵感
+⚙    ← 设置
+☀/☾  ← 主题切换（底部）
 ```
+
+点击活动栏图标即切换模式，同时：
+- 左侧栏渲染该模式专属列表（章节树/实体列表/提案列表等）
+- 主区域切换为对应模式的全屏视图
+- 右侧检查面板跟随当前选中对象（实体/节点/章节）刷新
+- 顶栏面包屑更新为当前路径（项目 / 上下文 / 模式名）
 
 ### 5.2 自动触发
 
@@ -442,9 +451,15 @@ const panelMap: Record<ModuleId, Component> = {
 | Cmd/Ctrl + 1 | 切换到写作模式 |
 | Cmd/Ctrl + 2 | 切换到图谱模式 |
 | Cmd/Ctrl + 3 | 切换到大纲模式 |
+| Cmd/Ctrl + 4 | 切换到审核模式 |
+| Cmd/Ctrl + 5 | 切换到知识模式 |
+| Cmd/Ctrl + 6 | 切换到灵感模式 |
+| Cmd/Ctrl + 7 | 切换到设置模式 |
 | Cmd/Ctrl + K | 打开命令面板（全局搜索） |
 | Cmd/Ctrl + Enter | 提交当前草稿（进入审核模式） |
 | Esc | 回到写作模式 |
+
+> **注意**：活动栏共 8 个按钮（7 模式 + 1 主题切换），其中主题切换不占用快捷键，通过活动栏底部按钮或设置页操作。
 
 ### 5.4 命令面板（Cmd+K）
 
@@ -561,7 +576,7 @@ Agent 对话面板不属于任何模式，全局可用。
 ### 8.1 导航结构
 
 ```
-顶栏：作品名 / 当前章节 / 模式切换 / 提交状态指示 / 主题 / 设置
+顶栏：作品名 / 面包屑路径（项目 → 上下文 → 当前模式） / 提交状态指示 / 主题 / 设置
 ├── 写作（Draft Editor）★ 主工作区
 │   ├── 章节列表（侧边面板）
 │   ├── 正文编辑器（主工作区）
@@ -648,7 +663,10 @@ Agent 对话面板不属于任何模式，全局可用。
 - 操作按钮：approve（候选→注册）/ deprecate（废弃）
 
 **审核动线**：
-- hint → [approve] → candidate → [approve] → 待确认 → [确认] → registered
+- hint → [approve] → candidate → [approve] → approved → [confirm] → registered
+- deprecated：手动废弃的实体
+- expired：来源草案修改后过期的线索
+- superseded：被新版本实体替代的旧实体
 - 每步有明确的视觉状态变化和确认
 
 ### 9.3 审核页（Proposal Review）
@@ -987,6 +1005,16 @@ GET    /api/projects/:projectId/foreshadowing       伏笔看板
 GET    /api/projects/:projectId/reader              读者知识状态
 ```
 
+**关系/关联管理**：
+```
+GET    /api/projects/:projectId/relations           列出所有关系
+POST   /api/projects/:projectId/relations           创建关系
+DELETE /api/projects/:projectId/relations/:id       删除关系
+GET    /api/projects/:projectId/entities/:eid/relations   实体关系列表
+POST   /api/projects/:projectId/entities/:eid/associations 手动关联
+GET    /api/projects/:projectId/source-layers       源码层查询
+```
+
 **搜索**：
 ```
 GET    /api/projects/:projectId/search?q=&type=     全局搜索
@@ -1300,10 +1328,10 @@ Agent 产出提案 → 顶栏显示"有待确认事项"
 
 | 后端状态 | 场景数 | 占比 |
 |---|---|---|
-| 已支持（Phase 7） | 22 | 34% |
-| 需适配（BFF/新 API） | 18 | 28% |
-| 需新功能（Phase 8-11） | 14 | 22% |
-| 纯前端 | 10 | 16% |
+| 已支持（Phase 7-8） | 39 | 60% |
+| 需适配（BFF/新 API） | 16 | 25% |
+| 需新功能（Phase 9-11） | 7 | 10% |
+| 纯前端 | 3 | 5% |
 
 ---
 
@@ -1349,7 +1377,7 @@ interface EntityListItem {
   id: string;
   displayName: string;
   typeLabel: string;
-  status: 'hint' | 'candidate' | 'approved' | 'registered' | 'deprecated';
+  status: 'hint' | 'candidate' | 'approved' | 'registered' | 'deprecated' | 'expired' | 'superseded';
   summary?: string;
   attributeCount: number;
   lastAppearChapter?: number;
@@ -1376,7 +1404,7 @@ interface EntityDetail {
   relations: Array<{
     targetEntityName: string;
     relationLabel: string;
-    sourceLayer: 'committed' | 'candidate' | 'hint';
+    sourceLayer: 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'deprecated';
   }>;
 }
 ```
@@ -1492,7 +1520,7 @@ interface GraphNode {
   id: string;
   label: string;
   type: 'character' | 'location' | 'item' | 'concept' | 'event' | 'thread' | 'draft' | 'chapter';
-  sourceLayer: 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'view';
+  sourceLayer: 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'deprecated';
 }
 
 interface GraphEdge {
@@ -1500,7 +1528,7 @@ interface GraphEdge {
   label: string;
   sourceNodeId: string;
   targetNodeId: string;
-  sourceLayer: 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'view';
+  sourceLayer: 'committed' | 'candidate' | 'draft' | 'hint' | 'association' | 'deprecated';
   direction: 'directed' | 'bidirectional' | 'undirected' | 'hierarchical';
 }
 ```
@@ -1633,7 +1661,7 @@ interface ExtractResponse {
 |---|---|
 | Cmd/Ctrl+K | 全局搜索/命令面板 |
 | Cmd/Ctrl+P | 切换项目 |
-| Cmd/Ctrl+1..6 | 切换工作模式 |
+| Cmd/Ctrl+1..7 | 切换七种工作模式（1=写作, 2=图谱, 3=大纲, 4=审核, 5=知识, 6=灵感, 7=设置） |
 | Cmd/Ctrl+B | 收起/展开左栏 |
 | Cmd/Ctrl+Shift+B | 收起/展开右栏 |
 | Cmd/Ctrl+, | 打开设置 |

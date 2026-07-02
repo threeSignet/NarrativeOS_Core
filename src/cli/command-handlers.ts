@@ -1245,3 +1245,351 @@ export async function handleTimeline(deps: CliDeps, _cmd: ParsedCommand): Promis
   } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
   return lines;
 }
+
+// =============================================================================
+// Phase 11 CLI 命令（/reader /foreshadow /reveal）
+// 此前 Phase 11 三模块仅 Agent 可调，作者无 CLI 入口。补齐只读浏览 + 状态推进。
+// =============================================================================
+
+/** /reader [list|<受众id>] —— 读者群体与认知状态 */
+export async function handleReader(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rs = (deps as any).readerService as {
+    listAudiences: (ctx: unknown) => Array<{ id: string; label: string; kind: string; enabled: boolean; notes?: string }>;
+    listKnowledgeStates: (audienceId: string) => Array<{ id: string; subjectRef: string; state: string; confidence: number; narrativePositionRef: { type: string; id: string } }>;
+  } | undefined;
+
+  if (!rs) { lines.push(`${C.red}❌ ReaderService 未注入${C.reset}`); return lines; }
+
+  const target = cmd.positional[0];
+  if (target && target !== 'list') {
+    // 查看指定受众的认知状态
+    try {
+      const states = rs.listKnowledgeStates(target);
+      lines.push(`${C.boldYellow}👥 读者认知（受众 ${target}，${states.length} 条）${C.reset}`);
+      if (states.length === 0) {
+        lines.push(`\n  ${C.gray}该受众暂无认知记录。${C.reset}`);
+      }
+      for (const s of states) {
+        const pos = `${s.narrativePositionRef.type}:${s.narrativePositionRef.id}`;
+        lines.push(`  [${s.state}] ${s.subjectRef} ${C.gray}@ ${pos} conf=${s.confidence.toFixed(2)}${C.reset}`);
+      }
+    } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+    return lines;
+  }
+
+  // 默认 list：受众清单
+  try {
+    const audiences = rs.listAudiences(ctx);
+    lines.push(`${C.boldYellow}👥 读者群体（${audiences.length} 个）${C.reset}`);
+    if (audiences.length === 0) {
+      lines.push(`\n  ${C.gray}暂无读者群体。Agent 创建认知状态时会自动建立默认目标读者。${C.reset}`);
+    }
+    for (const a of audiences) {
+      const note = a.notes ? ` ${C.gray}${a.notes}${C.reset}` : '';
+      lines.push(`  [${a.kind}] ${a.label} ${C.gray}(${a.id})${C.reset}${note}`);
+    }
+    lines.push(`\n  ${C.gray}查看某受众详情：/reader <受众id>${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /foreshadow [list|<计划id>] [advance <id>] —— 伏笔计划 */
+export async function handleForeshadow(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fs = (deps as any).foreshadowingService as {
+    listForeshadowingPlans: (ctx: unknown) => Array<{ id: string; label: string; kind: string; status: string; targetReaderEffect: string; linkedEntityRefs: string[] }>;
+  } | undefined;
+
+  if (!fs) { lines.push(`${C.red}❌ ForeshadowingService 未注入${C.reset}`); return lines; }
+
+  try {
+    const plans = fs.listForeshadowingPlans(ctx);
+    lines.push(`${C.boldYellow}🎭 伏笔计划（${plans.length} 个）${C.reset}`);
+    if (plans.length === 0) {
+      lines.push(`\n  ${C.gray}暂无伏笔计划。可通过对话让 Agent 创建，或用 /reveal 建立揭示计划。${C.reset}`);
+    }
+    for (const p of plans) {
+      const ents = p.linkedEntityRefs.length > 0 ? ` ${C.gray}关联 ${p.linkedEntityRefs.length} 实体${C.reset}` : '';
+      lines.push(`  [${p.status}] ${p.label} ${C.gray}(${p.kind})${C.reset}${ents}`);
+      lines.push(`    ${C.gray}目标效果：${p.targetReaderEffect}${C.reset}`);
+    }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /reveal [list|<计划id>] —— 揭示计划 */
+export async function handleReveal(deps: CliDeps, _cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fs = (deps as any).foreshadowingService as {
+    listRevealPlans: (ctx: unknown) => Array<{ id: string; label: string; subjectDescription: string; status: string; targetReaderEffect?: string; linkedThreadId?: string }>;
+  } | undefined;
+
+  if (!fs) { lines.push(`${C.red}❌ ForeshadowingService 未注入${C.reset}`); return lines; }
+
+  try {
+    const reveals = fs.listRevealPlans(ctx);
+    lines.push(`${C.boldYellow}💡 揭示计划（${reveals.length} 个）${C.reset}`);
+    if (reveals.length === 0) {
+      lines.push(`\n  ${C.gray}暂无揭示计划。可通过对话让 Agent 建立揭示计划，规划信息释放节奏。${C.reset}`);
+    }
+    for (const r of reveals) {
+      const thread = r.linkedThreadId ? ` ${C.gray}→ thread ${r.linkedThreadId}${C.reset}` : '';
+      lines.push(`  [${r.status}] ${r.label}${thread}`);
+      lines.push(`    ${C.gray}揭示内容：${r.subjectDescription}${C.reset}`);
+      if (r.targetReaderEffect) {
+        lines.push(`    ${C.gray}目标反应：${r.targetReaderEffect}${C.reset}`);
+      }
+    }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+// =============================================================================
+// Phase 12 CLI 命令（/prose /style /revision /retcon /import /export）
+// 正文草稿、风格系统、修订、Retcon视图、导入导出的只读浏览 + 基础写入入口。
+// =============================================================================
+
+/** /prose [list|new <标题>|<文档id>] [add <文档id> <文本>] —— 正文文档 */
+export async function handleProse(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ps = (deps as any).proseService as {
+    listDocuments: (ctx: unknown) => Array<{ id: string; title: string; version: number; updatedAt: string }>;
+    createDocument: (ctx: unknown, input: { title: string }) => { id: string; title: string };
+    getDocumentWithBlocks: (ctx: unknown, id: string) => { document: { id: string; title: string; version: number }; blocks: Array<{ id: string; kind: string; orderIndex: number; text: string }> };
+    addBlock: (ctx: unknown, input: { documentId: string; kind: string; text: string }) => { id: string };
+  } | undefined;
+
+  if (!ps) { lines.push(`${C.red}❌ ProseService 未注入${C.reset}`); return lines; }
+  const sub = cmd.positional[0];
+
+  try {
+    if (sub === 'new') {
+      const title = cmd.positional[1];
+      if (!title) { lines.push(`${C.yellow}用法：/prose new <标题>${C.reset}`); return lines; }
+      const doc = ps.createDocument(ctx, { title });
+      lines.push(`${C.green}✅ 正文文档已创建${C.reset}`);
+      lines.push(`  ${C.gray}id: ${doc.id} | title: ${doc.title}${C.reset}`);
+      return lines;
+    }
+    if (sub === 'add') {
+      const docId = cmd.positional[1];
+      const text = cmd.positional.slice(2).join(' ');
+      if (!docId || !text) { lines.push(`${C.yellow}用法：/prose add <文档id> <段落文本>${C.reset}`); return lines; }
+      const block = ps.addBlock(ctx, { documentId: docId, kind: 'paragraph', text });
+      lines.push(`${C.green}✅ 已追加段落${C.reset} ${C.gray}(${block.id})${C.reset}`);
+      return lines;
+    }
+    if (sub && sub !== 'list') {
+      // 查看指定文档的块
+      const { document, blocks } = ps.getDocumentWithBlocks(ctx, sub);
+      lines.push(`${C.boldYellow}📝 ${document.title}${C.reset} ${C.gray}(v${document.version}, ${blocks.length} 块)${C.reset}`);
+      for (const b of blocks) {
+        const kindTag = b.kind === 'chapter_title' ? '## ' : b.kind === 'scene_heading' ? '### ' : b.kind === 'separator' ? '---' : '';
+        lines.push(`  ${C.gray}[${b.orderIndex}]${C.reset} ${kindTag}${b.text}`);
+      }
+      return lines;
+    }
+    // 默认 list
+    const docs = ps.listDocuments(ctx);
+    lines.push(`${C.boldYellow}📝 正文文档（${docs.length} 篇）${C.reset}`);
+    if (docs.length === 0) {
+      lines.push(`\n  ${C.gray}暂无正文文档。/prose new <标题> 创建，或 /import 导入已有正文。${C.reset}`);
+    }
+    for (const d of docs) {
+      lines.push(`  ${d.title} ${C.gray}(v${d.version}, ${d.id})${C.reset}`);
+    }
+    lines.push(`\n  ${C.gray}子命令：/prose new <标题> | /prose add <id> <文本> | /prose <id> 查看${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /style [list|update <字段> <值>|add-example <k> <文本>|add-banned <模式>] —— 风格指南 */
+export async function handleStyle(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ss = (deps as any).styleService as {
+    getOrCreateDefaultGuide: (ctx: unknown) => { id: string; name: string; narrativePerson: string; narrativeDistance: string; pacingPreference: string; descriptionPreference: string[]; status: string };
+    listExamples: (ctx: unknown) => Array<{ id: string; kind: string; text: string; note?: string }>;
+    listBannedExpressions: (ctx: unknown) => Array<{ id: string; pattern: string; category?: string; reason?: string }>;
+  } | undefined;
+
+  if (!ss) { lines.push(`${C.red}❌ StyleService 未注入${C.reset}`); return lines; }
+
+  try {
+    const guide = ss.getOrCreateDefaultGuide(ctx);
+    lines.push(`${C.boldYellow}🎨 风格指南：${guide.name}${C.reset} ${C.gray}[${guide.status}]${C.reset}`);
+    lines.push(`  人称：${guide.narrativePerson} | 距离：${guide.narrativeDistance} | 节奏：${guide.pacingPreference}`);
+    lines.push(`  描写偏好：${guide.descriptionPreference.length > 0 ? guide.descriptionPreference.join(', ') : '未设'}`);
+
+    const examples = ss.listExamples(ctx);
+    lines.push(`\n  ${C.boldCyan}示例（${examples.length}）${C.reset}`);
+    for (const ex of examples) {
+      const tag = ex.kind === 'positive' ? '✓' : '✗';
+      lines.push(`  ${tag} ${ex.text.slice(0, 40)}${ex.text.length > 40 ? '…' : ''} ${ex.note ? C.gray + ex.note + C.reset : ''}`);
+    }
+
+    const banned = ss.listBannedExpressions(ctx);
+    lines.push(`\n  ${C.boldCyan}禁用表达（${banned.length}）${C.reset}`);
+    for (const b of banned) {
+      lines.push(`  ✗ ${b.pattern} ${C.gray}${b.category ?? ''}${C.reset}`);
+    }
+    lines.push(`\n  ${C.gray}通过对话让 Agent 配置风格详情，或 /style add-example <positive|negative> <文本>${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /revision <targetType> <targetId> —— 查看对象修订历史 */
+export async function handleRevision(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  const [targetType, targetId] = cmd.positional;
+  if (!targetType || !targetId) {
+    lines.push(`${C.yellow}用法：/revision <目标类型> <目标id>${C.reset}`);
+    lines.push(`  ${C.gray}类型：draft | prose_document | entity_sketch | chapter_plan | scene_plan | foreshadowing_plan${C.reset}`);
+    return lines;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rs = (deps as any).revisionService as {
+    listRevisionsByTarget: (ctx: unknown, tt: string, tid: string) => Array<{ id: string; action: string; summary: string; operator: string; createdAt: string }>;
+  } | undefined;
+
+  if (!rs) { lines.push(`${C.red}❌ RevisionService 未注入${C.reset}`); return lines; }
+
+  try {
+    const records = rs.listRevisionsByTarget(ctx, targetType, targetId);
+    lines.push(`${C.boldYellow}📜 修订历史（${targetType}:${targetId}，${records.length} 条）${C.reset}`);
+    if (records.length === 0) {
+      lines.push(`\n  ${C.gray}暂无修订记录。修改写作层对象时会自动留痕。${C.reset}`);
+    }
+    for (const r of records) {
+      lines.push(`  [${r.action}] ${r.summary} ${C.gray}(${r.operator}, ${r.createdAt.slice(0, 19)})${C.reset}`);
+    }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /retcon [list|<报告id>] —— Retcon 影响报告 */
+export async function handleRetcon(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rv = (deps as any).retconViewService as {
+    listReports: (ctx: unknown) => Array<{ id: string; retconProposalId: string; status: string; summary: string; affectedNodes: unknown[]; recheckList: unknown[]; createdAt: string }>;
+    getReport: (ctx: unknown, id: string) => { id: string; retconProposalId: string; status: string; summary: string; affectedNodes: Array<{ kind: string; id: string; effect: string; reason?: string }>; recheckList: Array<{ label: string; reason: string }>; createdAt: string };
+  } | undefined;
+
+  if (!rv) { lines.push(`${C.red}❌ RetconViewService 未注入${C.reset}`); return lines; }
+  const target = cmd.positional[0];
+
+  try {
+    if (target && target !== 'list') {
+      const report = rv.getReport(ctx, target);
+      lines.push(`${C.boldYellow}🔍 Retcon 影响报告${C.reset} ${C.gray}[${report.status}]${C.reset}`);
+      lines.push(`  ${C.gray}proposal: ${report.retconProposalId}${C.reset}`);
+      lines.push(`\n  ${report.summary}`);
+      lines.push(`\n  ${C.boldCyan}受影响节点（${report.affectedNodes.length}）${C.reset}`);
+      for (const n of report.affectedNodes) {
+        lines.push(`  [${n.effect}] ${n.kind}:${n.id} ${n.reason ? C.gray + n.reason + C.reset : ''}`);
+      }
+      lines.push(`\n  ${C.boldCyan}写作层重检项（${report.recheckList.length}）${C.reset}`);
+      for (const r of report.recheckList) {
+        lines.push(`  ⚠ ${r.label} ${C.gray}${r.reason}${C.reset}`);
+      }
+      return lines;
+    }
+    // 默认 list
+    const reports = rv.listReports(ctx);
+    lines.push(`${C.boldYellow}🔍 Retcon 影响报告（${reports.length} 个）${C.reset}`);
+    if (reports.length === 0) {
+      lines.push(`\n  ${C.gray}暂无报告。Agent 调 propose_retcon 后会自动生成影响报告。${C.reset}`);
+    }
+    for (const r of reports) {
+      lines.push(`  [${r.status}] ${r.retconProposalId} ${C.gray}(${r.affectedNodes.length} 节点, ${r.recheckList.length} 重检)${C.reset}`);
+    }
+    lines.push(`\n  ${C.gray}查看详情：/retcon <报告id>${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /import <文件路径> [type] —— 导入正文（从文件读取） */
+export async function handleImport(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  const filepath = cmd.positional[0];
+  if (!filepath) {
+    lines.push(`${C.yellow}用法：/import <文件路径> [prose|draft|setting_collection|mixed]${C.reset}`);
+    lines.push(`  ${C.gray}导入已有正文/设定，转换为写作层文档。不写 Core。${C.reset}`);
+    return lines;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ies = (deps as any).importExportService as {
+    importText: (ctx: unknown, input: { sourceFilename?: string; importType: string; content: string }) => { batch: { id: string; status: string }; documentId: string; blockCount: number };
+    listImportBatches: (ctx: unknown) => Array<{ id: string; sourceFilename?: string; importType: string; status: string; createdAt: string }>;
+  } | undefined;
+
+  if (!ies) { lines.push(`${C.red}❌ ImportExportService 未注入${C.reset}`); return lines; }
+
+  // 子命令 list
+  if (filepath === 'list') {
+    const batches = ies.listImportBatches(ctx);
+    lines.push(`${C.boldYellow}📥 导入批次（${batches.length} 个）${C.reset}`);
+    for (const b of batches) {
+      lines.push(`  [${b.status}] ${b.sourceFilename ?? '(粘贴)'} ${C.gray}(${b.importType}, ${b.createdAt.slice(0, 19)})${C.reset}`);
+    }
+    return lines;
+  }
+
+  try {
+    // 从文件读取（Node fs）
+    const fs = await import('node:fs');
+    const content = fs.readFileSync(filepath, 'utf-8');
+    const importType = cmd.positional[1] ?? 'mixed';
+    const result = ies.importText(ctx, { sourceFilename: filepath, importType, content });
+    lines.push(`${C.green}✅ 导入成功${C.reset}`);
+    lines.push(`  ${C.gray}批次: ${result.batch.id} | 文档: ${result.documentId} | ${result.blockCount} 块${C.reset}`);
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
+
+/** /export [scope] [文件路径] —— 导出项目数据为 JSON */
+export async function handleExport(deps: CliDeps, cmd: ParsedCommand): Promise<HandlerResult> {
+  const ctx = deps.ctx();
+  const lines: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ies = (deps as any).importExportService as {
+    exportProject: (ctx: unknown, scope: string) => { projectId: string; exportedAt: string; scope: string; data: Record<string, unknown> };
+  } | undefined;
+
+  if (!ies) { lines.push(`${C.red}❌ ImportExportService 未注入${C.reset}`); return lines; }
+
+  try {
+    const scope = cmd.positional[0] ?? 'all';
+    const outPath = cmd.positional[1];
+    const result = ies.exportProject(ctx, scope);
+    const json = JSON.stringify(result, null, 2);
+    const scopes = Object.keys(result.data);
+    const sizeKb = (Buffer.byteLength(json, 'utf-8') / 1024).toFixed(1);
+
+    if (outPath) {
+      const fs = await import('node:fs');
+      fs.writeFileSync(outPath, json, 'utf-8');
+      lines.push(`${C.green}✅ 已导出到 ${outPath}${C.reset} ${C.gray}(${sizeKb} KB)${C.reset}`);
+    } else {
+      lines.push(`${C.green}✅ 导出完成${C.reset} ${C.gray}(${sizeKb} KB, scope=${scope})${C.reset}`);
+      lines.push(`  ${C.gray}范围：${scopes.join(', ')}${C.reset}`);
+      lines.push(`\n  ${C.gray}保存到文件：/export ${scope} <文件路径>${C.reset}`);
+      lines.push(`  ${C.gray}可用范围：all | blueprint | entities | relations | spatial | chapters | scenes | reader | foreshadowing | prose | style${C.reset}`);
+    }
+  } catch (err) { lines.push(`${C.red}❌ ${renderErrorForAuthor(err)}${C.reset}`); }
+  return lines;
+}
