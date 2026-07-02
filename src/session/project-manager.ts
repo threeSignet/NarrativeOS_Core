@@ -22,7 +22,7 @@ import { ProjectSession, type ProjectSessionOptions } from './project-session.js
 
 /** 项目名合法校验（移植 project-selector.ts:75） */
 export function isValidProjectName(name: string): boolean {
-  if (!name || name.length === 0 || name.length > 100) return false;
+  if (!name || name.trim().length === 0 || name.length > 100) return false;
   if (name.startsWith('.')) return false;
   if (/[\\/]/.test(name)) return false; // 路径分隔符
   if (name.includes('..')) return false; // 穿越符

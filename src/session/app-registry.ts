@@ -176,9 +176,14 @@ interface AppProjectRow {
   last_opened_at: string;
 }
 
-/** 全局单例（一个进程一个 app.db） */
-let _registry: AppRegistry | undefined;
+/** 按 dbPath 缓存的单例（同一 app.db 路径复用，不同路径各自独立） */
+const _registries = new Map<string, AppRegistry>();
 export function getAppRegistry(dbPath?: string): AppRegistry {
-  if (!_registry) _registry = new AppRegistry(dbPath);
-  return _registry;
+  const key = dbPath ?? '__default__';
+  let r = _registries.get(key);
+  if (!r) {
+    r = new AppRegistry(dbPath);
+    _registries.set(key, r);
+  }
+  return r;
 }
