@@ -305,6 +305,19 @@ export class ProjectSession {
     });
   }
 
+  /**
+   * 构造引导期 ctx（projectId='pending'，仅用于 projectService.createProject）。
+   * createProject 内部会用新项目 id 覆盖 ctx.projectId 建审计，故此处占位安全。
+   * 仅新建项目场景使用。
+   */
+  makeCtxPending(): WritingRequestContext {
+    return makeRequestContext({
+      projectId: 'pending',
+      sessionId: `bootstrap-${Date.now()}`,
+      trigger: 'author_action',
+    });
+  }
+
   /** 关闭连接 */
   close(): void {
     this.db.close();
