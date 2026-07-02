@@ -92,7 +92,8 @@ async function exportData() {
         <section v-else-if="activeSection === 'data'" class="sp-section">
           <h2>数据与备份</h2>
           <p class="sp-hint">
-            所有数据存储在本地 SQLite 数据库（BFF 的 <code>data/drafting.db</code>）。<br>
+            每个项目的数据独立存储在 <code>data/projects/&lt;项目名&gt;/project.db</code>（Core+写作+Agent 单库），<br>
+            向量库在同目录的 <code>vectors/</code>；全局项目注册表在 <code>data/app.db</code>。<br>
             可导出当前项目的全部设定文档为 Markdown 文件。
           </p>
           <button class="btn btn--primary btn--sm" :disabled="exporting" @click="exportData">

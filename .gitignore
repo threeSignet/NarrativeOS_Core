@@ -4,6 +4,8 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+# 存储融合：本地数据目录（app.db 注册表 + 各项目 project.db/vectors/）
+data/
 lancedb_data/
 snapshots/
 
