@@ -13,6 +13,10 @@
 import { watch, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useEditor, EditorContent } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableCell from '@tiptap/extension-table-cell';
+import TableHeader from '@tiptap/extension-table-header';
 import { useUiStore } from '../../stores/ui';
 import { useLocalDraftsStore } from '../../stores/localDrafts';
 import { useConfirm } from '../../composables/useConfirm';
@@ -22,6 +26,7 @@ import EditorToolbar from './EditorToolbar.vue';
 import type { DocumentNode } from '../../shell/types';
 import {
   plainTextToTiptapDoc,
+  looksLikeMarkdown,
   contentStringToMarkdown,
   contentStringToPlainText,
 } from '../../utils/tiptapConvert';
@@ -45,11 +50,54 @@ const initialContent = (() => {
 
 const editor = useEditor({
   content: initialContent,
-  extensions: [StarterKit],
+  extensions: [
+    StarterKit,
+    // 表格扩展（StarterKit 不含）：允许渲染/编辑 markdown 粘贴进来的 | 表格 |
+    Table.configure({ resizable: false }),
+    TableRow,
+    TableCell,
+    TableHeader,
+  ],
   editorProps: {
     attributes: {
       class: 'prose-editor',
       'data-placeholder': '开始写下你的设定…',
+    },
+    // 粘贴 Markdown 时走结构化解析：StarterKit 的 input rules 只在逐字敲入时触发，
+    // 粘贴整段 md 不会转换（##/**/- 等标记会原样留在文本里）。这里拦截粘贴，
+    // 识别为 markdown 则用 plainTextToTiptapDoc 解析后插入结构化内容。
+    handlePaste: (view, event) => {
+      const clipboardData = event.clipboardData;
+      if (!clipboardData) return false;
+      // 只处理纯文本粘贴（带 HTML 格式的粘贴让浏览器默认处理）
+      const html = clipboardData.getData('text/html');
+      if (html && html.trim() !== '') return false;
+      const text = clipboardData.getData('text/plain');
+      if (!text || !looksLikeMarkdown(text)) return false;
+      const doc = plainTextToTiptapDoc(text);
+      // 把解析出的顶层节点逐个插入当前选区，替换选中的内容
+      const { state, dispatch } = view;
+      const { tr } = state;
+      // 先删除当前选区内容
+      tr.deleteSelection();
+      // 在选区起始位置插入解析出的内容
+      const nodes = doc.content ?? [];
+      if (nodes.length > 0) {
+        // 从 JSON 反序列化为 ProseMirror 节点再插入
+        const pmNodes = nodes.map(n => {
+          try {
+            return state.schema.nodeFromJSON(n);
+          } catch {
+            // 兜底：解析失败的节点退化为段落
+            return state.schema.nodes.paragraph.create();
+          }
+        });
+        tr.insert(tr.selection.from, pmNodes);
+        dispatch(tr);
+        event.preventDefault();
+        return true;
+      }
+      return false;
     },
   },
 });
@@ -266,6 +314,24 @@ function focusEditor() {
   padding-left: var(--sp-3); margin: var(--sp-3) 0;
   color: var(--text-2); font-style: italic;
 }
+/* 表格：边框 + 内边距，表头加粗带底色，兼容 sourceLayer 主题 */
+.doc-editor-scroll :deep(.prose-editor .tableWrapper) {
+  overflow-x: auto; margin: var(--sp-3) 0;
+}
+.doc-editor-scroll :deep(.prose-editor table) {
+  border-collapse: collapse; width: 100%;
+  font-family: var(--font-ui); font-size: .95em;
+}
+.doc-editor-scroll :deep(.prose-editor th),
+.doc-editor-scroll :deep(.prose-editor td) {
+  border: 1px solid var(--border-2);
+  padding: var(--sp-2) var(--sp-3); text-align: left;
+  vertical-align: top;
+}
+.doc-editor-scroll :deep(.prose-editor th) {
+  background: var(--bg-3); font-weight: 600; color: var(--text);
+}
+.doc-editor-scroll :deep(.prose-editor td > p) { margin: 0; }
 .doc-editor-scroll :deep(.prose-editor hr) {
   border: none; border-top: 1px solid var(--border-2);
   margin: var(--sp-4) 0;

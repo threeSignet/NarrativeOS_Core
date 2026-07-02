@@ -19,6 +19,66 @@ interface TiptapNode {
   text?: string;
 }
 
+/**
+ * 把一段行内文本解析成带 marks 的 text 节点数组。
+ * 识别：`**bold**`、`*italic*`/`_italic_`、`` `code` ``、`~~strike~~`。
+ * 不匹配标记的纯文本作为无 mark 的 text 节点。
+ * 这是「够用」的行内解析，不处理嵌套标记（如 **粗体里有`代码`**）。
+ */
+function parseInline(text: string): TiptapNode[] {
+  if (!text) return [];
+  const nodes: TiptapNode[] = [];
+  // 顺序：先 code（避免内部 ** 被误解析），再 bold，再 strike，再 italic
+  // 用全局正则逐段切割
+  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*]+\*)|(_[^_]+_)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index > last) {
+      nodes.push({ type: 'text', text: text.slice(last, m.index) });
+    }
+    const token = m[0]!;
+    if (token.startsWith('`')) {
+      nodes.push({ type: 'text', text: token.slice(1, -1), marks: [{ type: 'code' }] });
+    } else if (token.startsWith('**')) {
+      nodes.push({ type: 'text', text: token.slice(2, -2), marks: [{ type: 'bold' }] });
+    } else if (token.startsWith('~~')) {
+      nodes.push({ type: 'text', text: token.slice(2, -2), marks: [{ type: 'strike' }] });
+    } else if (token.startsWith('*')) {
+      nodes.push({ type: 'text', text: token.slice(1, -1), marks: [{ type: 'italic' }] });
+    } else if (token.startsWith('_')) {
+      nodes.push({ type: 'text', text: token.slice(1, -1), marks: [{ type: 'italic' }] });
+    }
+    last = m.index + token.length;
+  }
+  if (last < text.length) nodes.push({ type: 'text', text: text.slice(last) });
+  return nodes.length > 0 ? nodes : [{ type: 'text', text }];
+}
+
+/** 把任意行内文本包成 text 节点数组（带 marks 解析） */
+function inlineNodes(text: string): TiptapNode[] {
+  const parsed = parseInline(text);
+  return parsed;
+}
+
+/**
+ * 判断剪贴板文本是否「看起来像 Markdown」。
+ * 用于粘贴时决定是否走结构化解析（而非原样塞成纯文本段落）。
+ * 判据：含 # 标题 / - * + 列表 / > 引用 / | 表格 / ** 粗体 / ` 代码 等任一标记。
+ */
+export function looksLikeMarkdown(text: string): boolean {
+  if (!text) return false;
+  // 任一行的 markdown 标记命中即判定
+  return /^#{1,6}\s+/m.test(text)
+    || /^[-*+]\s+/m.test(text)
+    || /^\d+\.\s+/m.test(text)
+    || /^>\s?/m.test(text)
+    || /^\|.*\|/m.test(text)
+    || /\*\*[^*]+\*\*/.test(text)
+    || /`[^`]+`/.test(text)
+    || /^---+\s*$/m.test(text);
+}
+
 // ---------------------------------------------------------------------------
 // 纯文本 → TipTap JSON
 // ---------------------------------------------------------------------------
@@ -40,7 +100,7 @@ export function plainTextToTiptapDoc(text: string): TiptapNode {
 
   const flushParagraph = (buf: string[]) => {
     if (buf.length === 0) return;
-    content.push({ type: 'paragraph', content: [{ type: 'text', text: buf.join('\n') }] });
+    content.push({ type: 'paragraph', content: inlineNodes(buf.join('\n')) });
     buf.length = 0;
   };
 
@@ -59,13 +119,14 @@ export function plainTextToTiptapDoc(text: string): TiptapNode {
     }
 
     // 标题
-    const headingMatch = /^(#{1,3})\s+(.*)$/.exec(line);
+    const headingMatch = /^(#{1,6})\s+(.*)$/.exec(line);
     if (headingMatch) {
       flushParagraph(paraBuf);
-      const level = headingMatch[1]!.length;
+      // TipTap heading 仅支持 level 1-3（StarterKit 默认），超过则截到 3
+      const level = Math.min(headingMatch[1]!.length, 3);
       content.push({
         type: 'heading', attrs: { level },
-        content: [{ type: 'text', text: headingMatch[2]!.trim() }],
+        content: inlineNodes(headingMatch[2]!.trim()),
       });
       i++;
       continue;
@@ -81,7 +142,7 @@ export function plainTextToTiptapDoc(text: string): TiptapNode {
       }
       content.push({
         type: 'blockquote',
-        content: [{ type: 'paragraph', content: [{ type: 'text', text: quoteLines.join('\n') }] }],
+        content: [{ type: 'paragraph', content: inlineNodes(quoteLines.join('\n')) }],
       });
       continue;
     }
@@ -92,7 +153,7 @@ export function plainTextToTiptapDoc(text: string): TiptapNode {
       const items: TiptapNode[] = [];
       while (i < lines.length && /^[-*+]\s+/.test(lines[i]!.trimEnd())) {
         const itemText = lines[i]!.replace(/^[-*+]\s+/, '');
-        items.push({ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: itemText }] }] });
+        items.push({ type: 'listItem', content: [{ type: 'paragraph', content: inlineNodes(itemText) }] });
         i++;
       }
       content.push({ type: 'bulletList', content: items });
@@ -105,10 +166,51 @@ export function plainTextToTiptapDoc(text: string): TiptapNode {
       const items: TiptapNode[] = [];
       while (i < lines.length && /^\d+\.\s+/.test(lines[i]!.trimEnd())) {
         const itemText = lines[i]!.replace(/^\d+\.\s+/, '');
-        items.push({ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: itemText }] }] });
+        items.push({ type: 'listItem', content: [{ type: 'paragraph', content: inlineNodes(itemText) }] });
         i++;
       }
       content.push({ type: 'orderedList', content: items });
+      continue;
+    }
+
+    // 表格（连续 | ... | 行）：解析成 table/tableRow/tableHeader|tableCell 真表格节点。
+    // 第一行为表头（th），分隔行 |---|---| 跳过，其余为数据行（td）。
+    if (/^\|.*\|\s*$/.test(line)) {
+      flushParagraph(paraBuf);
+      const rows: Array<{ cells: string[]; isHeader: boolean }> = [];
+      let isFirstData = true;
+      while (i < lines.length && /^\|.*\|\s*$/.test(lines[i]!.trimEnd())) {
+        const raw = lines[i]!.trim().replace(/^\|/, '').replace(/\|\s*$/, '');
+        // 跳过分隔行 |---|---|（:--- 左对齐 / ---: 右对齐 / :--: 居中）
+        if (/^[\s-:|]+$/.test(raw)) { i++; continue; }
+        const cells = raw.split('|').map(c => c.trim());
+        rows.push({ cells, isHeader: isFirstData });
+        isFirstData = false;
+        i++;
+      }
+      if (rows.length > 0) {
+        const colCount = rows[0]!.cells.length;
+        const tableRows: TiptapNode[] = rows.map(r => {
+          const cellNodes = r.cells.map(cellText => {
+            const cell: TiptapNode = {
+              type: r.isHeader ? 'tableHeader' : 'tableCell',
+              attrs: { colspan: 1, rowspan: 1, colwidth: null },
+              content: [{ type: 'paragraph', content: inlineNodes(cellText) }],
+            };
+            return cell;
+          });
+          // 补齐列数不足的行（避免 schema 校验失败）
+          while (cellNodes.length < colCount) {
+            cellNodes.push({
+              type: r.isHeader ? 'tableHeader' : 'tableCell',
+              attrs: { colspan: 1, rowspan: 1, colwidth: null },
+              content: [{ type: 'paragraph' }],
+            });
+          }
+          return { type: 'tableRow', content: cellNodes };
+        });
+        content.push({ type: 'table', content: tableRows });
+      }
       continue;
     }
 
@@ -160,6 +262,15 @@ function docToText(node: TiptapNode): string {
         return child.content?.map((li, idx) => `${idx + 1}. ${docToText(li)}`).join('\n') ?? '';
       case 'horizontalRule':
         return '---';
+      case 'table':
+        // 表格 → 纯文本：每行单元格用制表符分隔
+        return (child.content ?? []).map(row =>
+          (row.content ?? []).map(cell => docToText(cell).trim()).join('\t'),
+        ).join('\n');
+      case 'tableRow':
+      case 'tableCell':
+      case 'tableHeader':
+        return inner;
       case 'paragraph':
       case 'listItem':
       default:
@@ -197,6 +308,26 @@ function docToMarkdown(node: TiptapNode): string {
         return child.content?.map((li, idx) => `${idx + 1}. ${docToMarkdown(li).trim()}`).join('\n') ?? '';
       case 'horizontalRule':
         return '---';
+      case 'table': {
+        // 表格 → markdown 表格：首行表头 + 分隔行 + 数据行
+        const rows = child.content ?? [];
+        if (rows.length === 0) return '';
+        const renderRow = (row: TiptapNode): string => {
+          const cells = (row.content ?? []).map(cell => docToMarkdown(cell).trim().replace(/\n/g, ' '));
+          return '| ' + cells.join(' | ') + ' |';
+        };
+        // 表头行（含 tableHeader 的首行）
+        const headerRow = renderRow(rows[0]!);
+        const colCount = (rows[0]!.content ?? []).length;
+        const sep = '| ' + Array(colCount).fill('---').join(' | ') + ' |';
+        const dataRows = rows.slice(1).map(renderRow);
+        return [headerRow, sep, ...dataRows].join('\n');
+      }
+      case 'tableRow':
+      case 'tableCell':
+      case 'tableHeader':
+        // 这些在 table 分支里递归处理，单独命中时退化为内联文本
+        return inner;
       case 'paragraph':
       case 'listItem':
       default:
