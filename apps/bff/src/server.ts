@@ -1,6 +1,8 @@
 // =============================================================================
-// NarrativeOS 起草工作台 BFF 入口（多项目版）
+// NarrativeOS 起草工作台 BFF 入口（融合后版）
 // =============================================================================
+// 改造（存储融合阶段6）：bootstrap 改用 ProjectManager + ProjectSession，
+// 不再用 drafting.db。激活项目 session 含完整 Core+写作+Agent 装配。
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { bootstrap } from './bootstrap.js';
@@ -8,7 +10,7 @@ import { registerProjectRoutes } from './routes/projects.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 
 async function main() {
-  const services = bootstrap();
+  const services = await bootstrap();
   const app = Fastify({ logger: true });
 
   await app.register(cors, {
@@ -22,17 +24,17 @@ async function main() {
     activeProjectId: services.activeProjectId.value,
   }));
 
-  // 项目管理路由
+  // 项目管理路由（从激活 session 取 service）
   registerProjectRoutes(app, {
-    projectService: services.projectService,
-    writingStore: services.writingStore,
+    projectService: services.session.projectService,
+    writingStore: services.session.writingStore,
     activeProjectId: services.activeProjectId,
     makeCtx: services.makeCtx,
   });
 
   // 文档 CRUD 路由
   registerDocumentRoutes(app, {
-    documentService: services.documentService,
+    documentService: services.session.documentService,
     makeCtx: services.makeCtx,
   });
 
@@ -42,7 +44,7 @@ async function main() {
     await app.listen({ port, host });
     console.log(`\n  🚀 NarrativeOS 起草工作台 BFF 已启动: http://${host}:${port}`);
     console.log(`  📂 当前激活项目: ${services.activeProjectId.value}`);
-    console.log(`  💾 数据库: ${process.env.DRAFTING_DB ?? './data/drafting.db'}\n`);
+    console.log(`  💾 项目库: ${services.session.writingStore ? 'data/projects/<项目>/project.db（融合架构）' : '未装配'}\n`);
   } catch (err) {
     app.log.error(err);
     process.exit(1);
