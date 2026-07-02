@@ -15,14 +15,18 @@ import type { ProjectSession } from '../../../src/session/project-session.js';
 import type { WritingRequestContext, WritingTrigger } from '../../../src/writing/services/context.js';
 
 export interface BffServices {
-  /** 当前激活项目 session（含完整 Core+写作+Agent 装配） */
+  /** ProjectManager（app.db 注册表，供路由列项目/建项目） */
+  manager: ReturnType<typeof getProjectManager>;
+  /** 当前激活项目 session（启动时的快照；切换后用 getActiveSession 取最新） */
   session: ProjectSession;
   /** 当前激活项目 id（= writingProjectId，可变：切换项目时改） */
   activeProjectId: { value: string };
-  /** 构造 ctx，默认绑定激活项目；传 pid 则绑定指定项目 */
+  /** 切换激活项目（开新 session，更新引用与 id） */
+  switchActive: (nameOrId: string) => Promise<void>;
+  /** 取当前激活 session（切换后返回最新，避免路由拿到过期 session） */
+  getActiveSession: () => ProjectSession;
+  /** 构造 ctx，绑定当前激活项目（自动跟随时激活 session） */
   makeCtx: (opts?: { pid?: string; trigger?: WritingTrigger }) => WritingRequestContext;
-  /** 切换激活项目（关旧 session，开新 session） */
-  switchProject: (nameOrId: string) => Promise<void>;
 }
 
 /**
@@ -36,31 +40,32 @@ export async function bootstrap(): Promise<BffServices> {
 
   // 无项目则建默认
   if (records.length === 0) {
-    const { record } = manager.createProject({ name: '我的作品', title: '我的作品' });
+    manager.createProject({ name: '我的作品', title: '我的作品' });
     records = manager.listProjects();
-    void record;
   }
 
   // 激活：取首项（listProjects 按 last_opened_at DESC）
   const active = records[0]!;
-  const session = await manager.openProject(active.name, { withVector: false, withAgent: false });
-
+  // 用一个可变的 session 容器，切换项目时更新引用
+  const sessionBox: { current: ProjectSession } = {
+    current: await manager.openProject(active.name, { withVector: false, withAgent: false }),
+  };
   const activeProjectId = { value: active.id };
 
   const makeCtx = (opts?: { pid?: string; trigger?: WritingTrigger }): WritingRequestContext => {
-    // pid 当前等于激活项目（BFF 单项目 session 模型）；显式 pid 留作多项目扩展
-    void opts?.pid;
-    return session.makeCtx({ trigger: opts?.trigger });
+    void opts?.pid; // pid 当前等于激活项目（BFF 单激活 session 模型）
+    return sessionBox.current.makeCtx({ trigger: opts?.trigger });
   };
 
-  const switchProject = async (nameOrId: string): Promise<void> => {
-    const newSession = await manager.openProject(nameOrId, { withVector: false, withAgent: false });
+  /** 切换激活项目：开新 session，更新引用与 id */
+  const switchActive = async (nameOrId: string): Promise<void> => {
+    sessionBox.current = await manager.openProject(nameOrId, { withVector: false, withAgent: false });
     const rec = manager.getProjectByName(nameOrId) ?? manager.getProject(nameOrId);
-    // 替换 session 引用（闭包内 session 变量重绑需要重新建 makeCtx）
-    // 简化：BFF 当前单项目，切换重建 services 由 server 层处理；此处仅更新 id
     if (rec) activeProjectId.value = rec.id;
-    void newSession;
   };
 
-  return { session, activeProjectId, makeCtx, switchProject };
+  /** 取当前激活 session（切换后返回最新） */
+  const getActiveSession = (): ProjectSession => sessionBox.current;
+
+  return { manager, session: sessionBox.current, activeProjectId, switchActive, getActiveSession, makeCtx };
 }

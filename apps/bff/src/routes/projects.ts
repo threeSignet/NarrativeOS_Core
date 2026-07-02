@@ -1,58 +1,72 @@
 // =============================================================================
-// /api/projects 路由——多项目管理（列出/新建/切换/删除/改名/取当前）
+// /api/projects 路由——多项目管理（融合后版，基于 app.db 注册表）
 // =============================================================================
+// 改造（存储融合）：路由改用 ProjectManager（基于 data/app.db 注册表），
+// 替代旧的 writingStore.listProjects（单库单项目模型）。
+//
+// 关键：列出全部项目走 manager.listProjects()（app.db），每个项目的标题/文档数
+// 需打开对应 session 查（项目数少，可接受）。激活项目切换 = manager.openProject。
 import type { FastifyInstance } from 'fastify';
-import type { ProjectService } from '../../../../src/writing/services/project-service.js';
-import type { SQLiteWritingStore } from '../../../../src/writing/repositories/writing-store.js';
+import type { ProjectManager } from '../../../../src/session/project-manager.js';
 import type { WritingTrigger } from '../../../../src/writing/services/context.js';
-import { WritingError, WritingErrorCode } from '../../../../src/writing/errors/error-codes.js';
 
 export interface ProjectRouteDeps {
-  projectService: ProjectService;
-  writingStore: SQLiteWritingStore;
+  manager: ProjectManager;
+  /** 当前激活项目 id（= writingProjectId，可变：切换项目时改） */
   activeProjectId: { value: string };
+  /** 切换激活项目（关旧 session 开新 session），由 bootstrap 提供 */
+  switchActive: (nameOrId: string) => Promise<void>;
   makeCtx: (opts?: { pid?: string; trigger?: WritingTrigger }) => any;
 }
 
-/** 项目对外的精简视图（去技术字段） */
-function toView(p: any) {
-  return {
-    id: p.id,
-    title: p.title,
-    premise: p.premise ?? '',
-    status: p.status,
-    version: p.version,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt,
-  };
-}
-
 export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDeps) {
-  const { projectService, writingStore, activeProjectId, makeCtx } = deps;
+  const { manager, activeProjectId, switchActive, makeCtx } = deps;
 
-  const statusFor = (code: string): number => {
-    if (code === WritingErrorCode.WRITING_OBJECT_NOT_FOUND) return 404;
-    if (code === WritingErrorCode.VERSION_CONFLICT) return 409;
-    return 400;
-  };
-
-  // ---------- 列出全部项目（含文档数统计） ----------
+  // ---------- 列出全部项目（app.db 注册表 + 逐个取标题/文档数） ----------
   app.get('/api/projects', async () => {
-    const projects = writingStore.listProjects();
-    const withCount = projects.map(p => ({
-      ...toView(p),
-      documentCount: writingStore.listDocuments(p.id).length,
-    }));
-    return {
-      projects: withCount,
-      activeId: activeProjectId.value,
-    };
+    const records = manager.listProjects();
+    // 逐个打开 session 取标题/文档数（项目数少，可接受）
+    const projects = [];
+    for (const r of records) {
+      let title = r.name;
+      let documentCount = 0;
+      let status = 'planning';
+      try {
+        const session = await manager.openProject(r.name, { withVector: false, withAgent: false });
+        const proj = session.writingStore.getProject(r.id);
+        if (proj) { title = proj.title; status = proj.status; }
+        documentCount = session.writingStore.listDocuments(r.id).length;
+      } catch { /* 读不到用默认值 */ }
+      projects.push({
+        id: r.id,
+        name: r.name,
+        title,
+        status,
+        documentCount,
+        createdAt: r.createdAt,
+        updatedAt: r.lastOpenedAt,
+      });
+    }
+    return { projects, activeId: activeProjectId.value };
   });
 
-  // ---------- 取当前激活项目 ----------
-  app.get('/api/projects/current', async () => {
-    const project = projectService.getProject(makeCtx());
-    return toView(project);
+  // ---------- 取当前激活项目详情 ----------
+  app.get('/api/projects/current', async (_req, reply) => {
+    const id = activeProjectId.value;
+    const r = manager.getProject(id);
+    if (!r) return reply.code(404).send({ error: '当前激活项目不存在' });
+    try {
+      const session = await manager.openProject(r.name, { withVector: false, withAgent: false });
+      const proj = session.writingStore.getProject(id);
+      if (!proj) return reply.code(404).send({ error: '项目记录不存在' });
+      return {
+        id: proj.id, title: proj.title, premise: proj.premise ?? '',
+        status: proj.status, version: proj.version,
+        createdAt: proj.createdAt, updatedAt: proj.updatedAt,
+      };
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
   });
 
   // ---------- 新建项目 ----------
@@ -60,23 +74,26 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
     const body = req.body as { title: string; premise?: string };
     if (!body.title?.trim()) return reply.code(400).send({ error: '项目名不能为空' });
     try {
-      // createProject 内部用 ctx.projectId 作新项目 id 占位，这里用临时 ctx
-      const bootstrapCtx = makeCtx({ pid: 'bootstrap', trigger: 'author_action' });
-      const project = projectService.createProject(bootstrapCtx, { title: body.title.trim(), premise: body.premise });
-      return toView(project);
+      // 项目名（目录名）= 标题；createProject 建目录+装配+写 app.db
+      const { record } = manager.createProject({
+        name: body.title.trim(),
+        title: body.title.trim(),
+        premise: body.premise,
+      });
+      return { id: record.id, title: body.title.trim(), name: record.name };
     } catch (err) {
-      const e = err as WritingError;
-      return reply.code(statusFor(e.code)).send({ error: e.message, code: e.code });
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
   // ---------- 切换激活项目 ----------
   app.post('/api/projects/:pid/activate', async (req, reply) => {
     const { pid } = req.params as { pid: string };
-    const project = writingStore.getProject(pid);
-    if (!project) return reply.code(404).send({ error: '项目不存在' });
-    activeProjectId.value = pid;
-    return { activeId: pid };
+    // pid 可能是 writingProjectId 或项目名，都能被 manager 解析
+    const r = manager.getProject(pid) ?? manager.getProjectByName(pid);
+    if (!r) return reply.code(404).send({ error: '项目不存在' });
+    await switchActive(r.name);
+    return { activeId: activeProjectId.value };
   });
 
   // ---------- 改项目元信息（名/前提）----------
@@ -86,97 +103,97 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
     if (body.title === undefined && body.premise === undefined) {
       return reply.code(400).send({ error: '需至少指定 title 或 premise' });
     }
+    const r = manager.getProject(pid);
+    if (!r) return reply.code(404).send({ error: '项目不存在' });
     try {
-      const ctx = makeCtx({ pid });
-      const updated = projectService.updateProjectMeta(ctx, {
+      const session = await manager.openProject(r.name, { withVector: false, withAgent: false });
+      const updated = session.projectService.updateProjectMeta(makeCtx({ pid }), {
         ...(body.title !== undefined ? { title: body.title.trim() } : {}),
         ...(body.premise !== undefined ? { premise: body.premise } : {}),
       });
-      return toView(updated);
+      return {
+        id: updated.id, title: updated.title, premise: updated.premise ?? '',
+        status: updated.status, version: updated.version,
+        createdAt: updated.createdAt, updatedAt: updated.updatedAt,
+      };
     } catch (err) {
-      const e = err as WritingError;
-      return reply.code(statusFor(e.code)).send({ error: e.message, code: e.code });
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  // ---------- 软删项目（级联）----------
+  // ---------- 软删项目（注销注册 + 关 session，不删文件）----------
   app.delete('/api/projects/:pid', async (req, reply) => {
     const { pid } = req.params as { pid: string };
-    const project = writingStore.getProject(pid);
-    if (!project) return reply.code(404).send({ error: '项目不存在' });
-    try {
-      const ctx = makeCtx({ pid });
-      projectService.archiveProject(ctx);
-      // 删的是当前激活项目 → 切到剩余的第一个（若有）
-      if (activeProjectId.value === pid) {
-        const remaining = writingStore.listProjects();
-        activeProjectId.value = remaining[0]?.id ?? '';
-      }
-      return { ok: true, activeId: activeProjectId.value };
-    } catch (err) {
-      const e = err as WritingError;
-      return reply.code(statusFor(e.code)).send({ error: e.message, code: e.code });
+    const r = manager.getProject(pid);
+    if (!r) return reply.code(404).send({ error: '项目不存在' });
+    manager.unregisterProject(pid);
+    // 删的是当前激活项目 → 切到剩余的第一个（若有）
+    if (activeProjectId.value === pid) {
+      const remaining = manager.listProjects();
+      activeProjectId.value = remaining[0]?.id ?? '';
     }
+    return { ok: true, activeId: activeProjectId.value };
   });
 
   // ---------- 导出项目设定集为 Markdown ----------
-  // 把项目下所有文档按树形结构拼成一个 Markdown 文本。
-  // 文件夹 → 标题层级（# / ## / ### 按深度）；文档 → 二级标题 + 正文。
   app.get('/api/projects/:pid/export', async (req, reply) => {
     const { pid } = req.params as { pid: string };
-    const project = writingStore.getProject(pid);
-    if (!project) return reply.code(404).send({ error: '项目不存在' });
+    const r = manager.getProject(pid);
+    if (!r) return reply.code(404).send({ error: '项目不存在' });
+    try {
+      const session = await manager.openProject(r.name, { withVector: false, withAgent: false });
+      const writingStore = session.writingStore;
+      const project = writingStore.getProject(pid);
+      if (!project) return reply.code(404).send({ error: '项目记录不存在' });
+      const allDocs = writingStore.listDocuments(pid);
 
-    const allDocs = writingStore.listDocuments(pid);
-
-    // 按 parentId 组装树
-    const byParent = new Map<string | null, typeof allDocs>();
-    for (const d of allDocs) {
-      const key = d.parentId;
-      if (!byParent.has(key)) byParent.set(key, []);
-      byParent.get(key)!.push(d);
-    }
-
-    const lines: string[] = [];
-    // 文档头部
-    lines.push(`# ${project.title}`);
-    lines.push('');
-    if (project.premise) {
-      lines.push(`> ${project.premise}`);
-      lines.push('');
-    }
-    lines.push(`> 导出时间：${new Date().toISOString().slice(0, 19).replace('T', ' ')}`);
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-
-    // 递归生成 Markdown（文件夹=标题，文档=标题+正文）
-    const renderNode = (node: typeof allDocs[number], depth: number) => {
-      const heading = '#'.repeat(Math.min(depth + 2, 6));
-      lines.push(`${heading} ${node.title}`);
-      lines.push('');
-      if (node.kind === 'document' && node.content) {
-        // content 可能是 TipTap JSON / HTML / 纯文本；简单提取文本
-        let text = node.content;
-        if (text.trim().startsWith('{')) {
-          try { text = extractTextFromTiptapJson(JSON.parse(text)); } catch { /* 用原文 */ }
-        }
-        // HTML 则去标签
-        text = text.replace(/<[^>]+>/g, '').trim();
-        if (text) { lines.push(text); lines.push(''); }
+      // 按 parentId 组装树
+      const byParent = new Map<string | null, typeof allDocs>();
+      for (const d of allDocs) {
+        const key = d.parentId;
+        if (!byParent.has(key)) byParent.set(key, []);
+        byParent.get(key)!.push(d);
       }
-      const children = (byParent.get(node.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
-      for (const c of children) renderNode(c, depth + 1);
-    };
 
-    const roots = (byParent.get(null) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
-    for (const r of roots) renderNode(r, 1);
+      const lines: string[] = [];
+      lines.push(`# ${project.title}`);
+      lines.push('');
+      if (project.premise) {
+        lines.push(`> ${project.premise}`);
+        lines.push('');
+      }
+      lines.push(`> 导出时间：${new Date().toISOString().slice(0, 19).replace('T', ' ')}`);
+      lines.push('');
+      lines.push('---');
+      lines.push('');
 
-    const markdown = lines.join('\n');
-    const filename = encodeURIComponent(`${project.title}-设定集.md`);
-    reply.header('Content-Type', 'text/markdown; charset=utf-8');
-    reply.header('Content-Disposition', `attachment; filename="${filename}"`);
-    return markdown;
+      const renderNode = (node: typeof allDocs[number], depth: number) => {
+        const heading = '#'.repeat(Math.min(depth + 2, 6));
+        lines.push(`${heading} ${node.title}`);
+        lines.push('');
+        if (node.kind === 'document' && node.content) {
+          let text = node.content;
+          if (text.trim().startsWith('{')) {
+            try { text = extractTextFromTiptapJson(JSON.parse(text)); } catch { /* 用原文 */ }
+          }
+          text = text.replace(/<[^>]+>/g, '').trim();
+          if (text) { lines.push(text); lines.push(''); }
+        }
+        const children = (byParent.get(node.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
+        for (const c of children) renderNode(c, depth + 1);
+      };
+
+      const roots = (byParent.get(null) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
+      for (const root of roots) renderNode(root, 1);
+
+      const markdown = lines.join('\n');
+      const filename = encodeURIComponent(`${project.title}-设定集.md`);
+      reply.header('Content-Type', 'text/markdown; charset=utf-8');
+      reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+      return markdown;
+    } catch (err) {
+      return reply.code(500).send({ error: String(err) });
+    }
   });
 }
 

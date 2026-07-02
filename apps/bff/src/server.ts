@@ -24,17 +24,17 @@ async function main() {
     activeProjectId: services.activeProjectId.value,
   }));
 
-  // 项目管理路由（从激活 session 取 service）
+  // 项目管理路由（基于 ProjectManager / app.db 注册表）
   registerProjectRoutes(app, {
-    projectService: services.session.projectService,
-    writingStore: services.session.writingStore,
+    manager: services.manager,
     activeProjectId: services.activeProjectId,
+    switchActive: services.switchActive,
     makeCtx: services.makeCtx,
   });
 
-  // 文档 CRUD 路由
+  // 文档 CRUD 路由（documentService 动态取激活 session 的，切换项目后不失效）
   registerDocumentRoutes(app, {
-    documentService: services.session.documentService,
+    getDocumentService: () => services.getActiveSession().documentService,
     makeCtx: services.makeCtx,
   });
 

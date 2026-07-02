@@ -10,12 +10,13 @@ import type { WritingTrigger } from '../../../../src/writing/services/context.js
 import { WritingError, WritingErrorCode } from '../../../../src/writing/errors/error-codes.js';
 
 export interface RouteDeps {
-  documentService: DocumentService;
+  /** 取当前激活项目的 documentService（切换项目后返回新 session 的，避免过期引用） */
+  getDocumentService: () => DocumentService;
   makeCtx: (opts?: { pid?: string; trigger?: WritingTrigger }) => any;
 }
 
 export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
-  const { documentService, makeCtx } = deps;
+  const { getDocumentService, makeCtx } = deps;
 
   const statusFor = (code: string): number => {
     if (code === WritingErrorCode.WRITING_OBJECT_NOT_FOUND) return 404;
@@ -26,7 +27,7 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
   // ---------- 列出文档树 ----------
   app.get('/api/projects/:pid/documents', async (req) => {
     const { pid } = req.params as { pid: string };
-    return documentService.listTree(makeCtx({ pid }));
+    return getDocumentService().listTree(makeCtx({ pid }));
   });
 
   // ---------- 获取单个文档 ----------
@@ -39,7 +40,7 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
       // 因为 DocumentService.getDocument 只比对 doc.projectId === ctx.projectId。
       // 这里取不到 pid，改为信任 service 内部校验：用激活项目 ctx，
       // 若不匹配 service 抛 NOT_FOUND。
-      return documentService.getDocument(makeCtx(), id);
+      return getDocumentService().getDocument(makeCtx(), id);
     } catch (err) {
       const e = err as WritingError;
       return reply.code(statusFor(e.code)).send({ error: e.message, code: e.code });
@@ -62,13 +63,13 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
     try {
       const ctx = makeCtx({ pid });
       if (body.kind === 'folder') {
-        return documentService.createFolder(ctx, {
+        return getDocumentService().createFolder(ctx, {
           parentId: body.parentId ?? null,
           title: body.title,
           icon: body.icon,
         });
       }
-      return documentService.createDocument(ctx, {
+      return getDocumentService().createDocument(ctx, {
         parentId: body.parentId ?? null,
         title: body.title,
         template: body.template as any,
@@ -96,13 +97,13 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
     try {
       const ctx = makeCtx();
       if (body.content !== undefined) {
-        return documentService.updateContent(ctx, id, body.expectedVersion, body.content, body.contentFormat as any);
+        return getDocumentService().updateContent(ctx, id, body.expectedVersion, body.content, body.contentFormat as any);
       }
       if (body.title !== undefined) {
-        return documentService.rename(ctx, id, body.expectedVersion, body.title);
+        return getDocumentService().rename(ctx, id, body.expectedVersion, body.title);
       }
       if (body.parentId !== undefined) {
-        return documentService.move(ctx, id, body.expectedVersion, body.parentId);
+        return getDocumentService().move(ctx, id, body.expectedVersion, body.parentId);
       }
       return reply.code(400).send({ error: 'PATCH 需至少包含 content/title/parentId 之一' });
     } catch (err) {
@@ -115,7 +116,7 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
   app.post('/api/projects/:pid/documents/reorder', async (req) => {
     const { pid } = req.params as { pid: string };
     const body = req.body as { parentId: string | null; orderedIds: string[] };
-    documentService.reorder(makeCtx({ pid }), body.parentId, body.orderedIds);
+    getDocumentService().reorder(makeCtx({ pid }), body.parentId, body.orderedIds);
     return { ok: true };
   });
 
@@ -138,7 +139,7 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
         if (!f.content || f.content.trim() === '') continue;
         const title = deriveImportTitle(f.filename, f.content);
         const tiptapContent = plainTextToTiptapJson(f.content);
-        const doc = documentService.createDocument(ctx, {
+        const doc = getDocumentService().createDocument(ctx, {
           parentId: body.parentId ?? null,
           title,
           content: tiptapContent,
@@ -156,7 +157,7 @@ export function registerDocumentRoutes(app: FastifyInstance, deps: RouteDeps) {
   // ---------- 归档（软删除，文件夹级联）----------
   app.delete('/api/documents/:id', async (req) => {
     const { id } = req.params as { id: string };
-    documentService.archive(makeCtx(), id);
+    getDocumentService().archive(makeCtx(), id);
     return { ok: true };
   });
 }
