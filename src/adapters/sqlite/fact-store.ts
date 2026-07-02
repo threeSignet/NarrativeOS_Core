@@ -297,20 +297,59 @@ export class SQLiteFactStoreAdapter implements FactStore {
   // P1-1 修复：Fact 序列改为 DB COUNT 查询（见 assert 方法），不再持有内存计数器。
   // 原内存 Map 在进程重启后清空；若为已存在事件重新 assert 会生成重复 factId 触发主键冲突。
 
+  /** 私有标记：用于区分"已打开句柄"的内部构造路径，避免与公开路径构造函数签名冲突 */
+  private static readonly EXISTING_DB = Symbol('existing-db');
+
   /**
-   * @param dbPath   数据库文件路径，或 ':memory:' 用于内存数据库
-   * @param projectId 项目 ID，用于初始化 project_state 与状态版本乐观锁
+   * 公开构造：自己打开 db 文件（或 ':memory:'），启用 WAL/foreign_keys，建表。
+   * 54+ 测试沿用此路径：`new SQLiteFactStoreAdapter(':memory:', projectId)`。
    */
-  constructor(dbPath: string, projectId: string = 'default') {
+  constructor(dbPath: string, projectId?: string);
+
+  /**
+   * 内部构造：用「已打开」的 Database 句柄构造（配合 EXISTING_DB 标记）。
+   * 仅供 forExistingDb 使用，不 new Database、不重复 pragma。
+   */
+  constructor(db: Database.Database, projectId: string, marker: symbol);
+
+  /** 构造实现：按是否带 EXISTING_DB 标记分流 */
+  constructor(dbPathOrDb: string | Database.Database, projectId: string = 'default', marker?: symbol) {
     this.projectId = projectId;
-    // 创建数据库连接并启用 WAL 模式
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
+    if (marker === SQLiteFactStoreAdapter.EXISTING_DB) {
+      // 已打开句柄路径：直接持有（调用方负责 pragma）
+      this.db = dbPathOrDb as Database.Database;
+    } else {
+      // 常规路径：打开文件并启用 WAL/foreign_keys
+      this.db = new Database(dbPathOrDb as string);
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('foreign_keys = ON');
+    }
+    // 建表 + 初始化项目状态（两条路径共用）
+    this.initSchema(projectId);
+  }
 
-    // 建表
+  /**
+   * 工厂方法：用「已打开」的 Database 句柄构造（不再自己 new Database）。
+   *
+   * 用于存储融合后的 ProjectSession：由 ProjectSession 统一打开 project.db
+   * 并设置 pragma，再把句柄传给 FactStore 与其他 adapter 共享（消除"FactStore
+   * 既是 adapter 又是 db 工厂"的双重身份）。调用方需自行保证：
+   *   - 句柄已设置 WAL / foreign_keys（FactStore 不再重复设置）
+   *   - 同一句柄不会被多个 FactStore 实例重复建表（DDL 幂等，可重复执行）
+   *
+   * 不影响旧构造函数：54+ 测试继续用 `new SQLiteFactStoreAdapter(':memory:')`。
+   */
+  static forExistingDb(db: Database.Database, projectId: string = 'default'): SQLiteFactStoreAdapter {
+    return new SQLiteFactStoreAdapter(db, projectId, SQLiteFactStoreAdapter.EXISTING_DB);
+  }
+
+  /**
+   * 建表 + 初始化 project_state（幂等）。两条构造路径共用。
+   * 抽成私有方法以避免重复逻辑。
+   */
+  private initSchema(projectId: string): void {
+    // 建表（DDL 幂等）
     this.db.exec(DDL);
-
     // 初始化项目状态（幂等）
     this.db.prepare(`
       INSERT OR IGNORE INTO project_state (project_id, state_version, current_chapter)
