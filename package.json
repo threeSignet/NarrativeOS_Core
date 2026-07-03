@@ -13,7 +13,10 @@
   },
   "scripts": {
     "build": "tsc --noEmit false",
-    "dev": "tsx --watch src/index.ts",
+    "dev": "concurrently -n web,bff -c green,cyan \"pnpm -C apps/web dev\" \"pnpm -C apps/bff dev\"",
+    "dev:web": "pnpm -C apps/web dev",
+    "dev:bff": "pnpm -C apps/bff dev",
+    "dev:core": "tsx --watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -41,6 +44,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.9.2",
+    "concurrently": "^10.0.3",
     "dotenv": "^17.4.2",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
