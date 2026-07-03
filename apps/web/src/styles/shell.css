@@ -16,12 +16,15 @@
     "statusbar statusbar statusbar statusbar";
   height: 100vh;
   transition: grid-template-columns var(--t);
-  /* 默认列宽：侧栏显、右面板隐（panel 为预留空区） */
+  /* 默认列宽：侧栏显、右面板 380px（Agent 聊天面板）
+     .hide-panel 负责收起（panelHidden=true / agentPanelOpen=false 时由 App.vue 加该类） */
   --col-sidebar: var(--w-sidebar);
-  --col-panel: 0px;
+  --col-panel: var(--w-panel);
 }
 .app.hide-sidebar { --col-sidebar: 0px; }
 .app.hide-panel   { --col-panel: 0px; }
+/* 拖拽中禁用 grid 列宽过渡——否则宽度变化有动画延迟，跟不上鼠标 */
+.app.is-resizing { transition: none !important; }
 
 .titlebar  { grid-area: titlebar; }
 .activity-bar { grid-area: activity; }
@@ -132,6 +135,32 @@
    用 border-2（比 border 略亮）保证深色背景下清晰可见。 */
 .sidebar { border-right: 1px solid var(--border-2); }
 .panel { border-left: 1px solid var(--border-2); }
+
+/* Agent 面板拖拽分隔条——绝对定位浮在 panel 左边缘，可左右拖拽改宽度 */
+.panel-resizer {
+  grid-area: panel;
+  position: relative;
+  width: 0;
+  height: 100%;
+  z-index: 10;
+  align-self: stretch;
+  justify-self: start;
+  margin-left: -3px;
+  cursor: col-resize;
+}
+/* 拖拽热区：3px 宽的透明条，hover/拖拽时显示蓝色高亮线 */
+.panel-resizer::after {
+  content: '';
+  position: absolute;
+  left: 0; top: 0;
+  width: 5px; height: 100%;
+  background: transparent;
+  transition: background var(--t-fast);
+}
+.panel-resizer:hover::after,
+.panel-resizer.is-dragging::after {
+  background: var(--accent);
+}
 
 .side-head {
   height: var(--h-main-header); flex-shrink: 0;

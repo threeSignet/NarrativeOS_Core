@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // App 根：装配 VS Code 式空壳，多项目启动，全局 Toast/Confirm/命令面板 挂载
-import { onMounted, onBeforeUnmount } from 'vue';
+import { onMounted, onBeforeUnmount, ref } from 'vue';
 import TitleBar from './shell/TitleBar.vue';
 import ActivityBar from './shell/ActivityBar.vue';
 import SideBar from './shell/SideBar.vue';
@@ -9,6 +9,7 @@ import StatusBar from './shell/StatusBar.vue';
 import ToastContainer from './shell/ToastContainer.vue';
 import ConfirmDialog from './shell/ConfirmDialog.vue';
 import CommandPalette from './shell/CommandPalette.vue';
+import AgentPanel from './plugins/agent-panel/AgentPanel.vue';
 import { useUiStore } from './stores/ui';
 import { useDocumentStore } from './stores/document';
 import { useLocalDraftsStore } from './stores/localDrafts';
@@ -31,6 +32,31 @@ function onGlobalKeydown(e: KeyboardEvent) {
     if (ui.commandPaletteOpen) ui.closeCommandPalette();
     else ui.openCommandPalette();
   }
+}
+
+// ===== Agent 面板拖拽改宽度 =====
+const isResizing = ref(false);
+function startResize(e: MouseEvent) {
+  e.preventDefault();
+  isResizing.value = true;
+  // 拖拽中禁用文本选择 + 改全局光标
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'col-resize';
+  const startX = e.clientX;
+  const startW = ui.agentPanelWidth;
+  const onMove = (ev: MouseEvent) => {
+    // panel 在右侧：鼠标左移（deltaX 负）→ 宽度增大
+    ui.setAgentPanelWidth(startW - (ev.clientX - startX));
+  };
+  const onUp = () => {
+    isResizing.value = false;
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
 }
 
 onMounted(async () => {
@@ -73,12 +99,25 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app" :class="{ 'hide-sidebar': ui.sidebarHidden, 'hide-panel': ui.panelHidden }">
+  <div
+    class="app"
+    :class="{ 'hide-sidebar': ui.sidebarHidden, 'hide-panel': ui.panelHidden, 'is-resizing': isResizing }"
+    :style="{ '--col-panel': ui.agentPanelOpen ? ui.agentPanelWidth + 'px' : '0px' }"
+  >
     <TitleBar />
     <ActivityBar />
     <SideBar />
     <EditorArea />
-    <aside class="panel" aria-hidden="true"></aside>
+    <!-- 拖拽分隔条：仅 Agent 面板打开时显示，左右拖拽改面板宽度 -->
+    <div
+      v-if="ui.agentPanelOpen"
+      class="panel-resizer"
+      :class="{ 'is-dragging': isResizing }"
+      @mousedown="startResize"
+    ></div>
+    <aside class="panel" aria-hidden="true">
+      <AgentPanel v-if="ui.agentPanelOpen" />
+    </aside>
     <StatusBar />
   </div>
   <!-- 全局 Toast（右上角轻提示） -->

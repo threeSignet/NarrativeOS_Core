@@ -54,9 +54,9 @@ export async function bootstrap(): Promise<BffServices> {
 
   // 激活：取首项（listProjects 按 last_opened_at DESC）
   const active = records[0]!;
-  // 用一个可变的 session 容器，切换项目时更新引用
+  // withAgent:true——/api/agent/chat 需要 NarrativeAgent
   const sessionBox: { current: ProjectSession } = {
-    current: await manager.openProject(active.name, { withVector: false, withAgent: false }),
+    current: await manager.openProject(active.name, { withVector: false, withAgent: true }),
   };
   const activeProjectId = { value: active.id };
 
@@ -65,9 +65,9 @@ export async function bootstrap(): Promise<BffServices> {
     return sessionBox.current.makeCtx({ trigger: opts?.trigger });
   };
 
-  /** 切换激活项目：开新 session，更新引用与 id */
+  /** 切换激活项目（同步开 Agent） */
   const switchActive = async (nameOrId: string): Promise<void> => {
-    sessionBox.current = await manager.openProject(nameOrId, { withVector: false, withAgent: false });
+    sessionBox.current = await manager.openProject(nameOrId, { withVector: false, withAgent: true });
     const rec = manager.getProjectByName(nameOrId) ?? manager.getProject(nameOrId);
     if (rec) activeProjectId.value = rec.id;
   };

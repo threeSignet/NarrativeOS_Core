@@ -1,13 +1,22 @@
 // =============================================================================
-// NarrativeOS 起草工作台 BFF 入口（融合后版）
+// NarrativeOS 起草工作台 BFF 入口（Fastify 单端口）
 // =============================================================================
-// 改造（存储融合阶段6）：bootstrap 改用 ProjectManager + ProjectSession，
-// 不再用 drafting.db。激活项目 session 含完整 Core+写作+Agent 装配。
+// dotenv 必须显式指定项目根的 .env——pnpm dev 时 BFF 子进程 CWD=apps/bff/，
+// 而 .env 在项目根；dotenv/config 默认找 process.cwd()/.env 会找不到。
+import { config } from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+config({ path: resolve(__dirname, '../../../.env') });
+
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { bootstrap } from './bootstrap.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerDocumentRoutes } from './routes/documents.js';
+import { registerAgentRoutes } from './routes/agent.js';
+import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
   const services = await bootstrap();
@@ -18,33 +27,41 @@ async function main() {
     credentials: true,
   });
 
-  // 健康检查
-  app.get('/api/health', async () => ({
-    ok: true,
-    activeProjectId: services.activeProjectId.value,
-  }));
-
-  // 项目管理路由（基于 ProjectManager / app.db 注册表）
+  app.get('/api/health', async () => ({ ok: true, activeProjectId: services.activeProjectId.value }));
   registerProjectRoutes(app, {
-    manager: services.manager,
-    activeProjectId: services.activeProjectId,
-    switchActive: services.switchActive,
-    makeCtx: services.makeCtx,
+    manager: services.manager, activeProjectId: services.activeProjectId,
+    switchActive: services.switchActive, makeCtx: services.makeCtx,
   });
-
-  // 文档 CRUD 路由（documentService 动态取激活 session 的，切换项目后不失效）
   registerDocumentRoutes(app, {
     getDocumentService: () => services.getActiveSession().documentService,
     makeCtx: services.makeCtx,
+  });
+
+  // Agent SSE——Fastify 单端口，不 hijack + reply.raw.writeHead（参考 Active_1）
+  // getAgent 懒加载兜底：每次请求时确保 agent 装配。
+  // 防 tsx watch 热重载后会话缓存命中旧的无 agent session、或进程重启时序问题。
+  const agentSessions = createAgentSessionManager();
+  const ensureAgent = async () => {
+    const session = services.getActiveSession();
+    if (!session.agent) {
+      console.log('[BFF] agent 未装配，懒加载 initAgent...');
+      await session.initAgent();
+    }
+    return session.agent;
+  };
+  // 启动时预装配一次（避免首请求慢）
+  await ensureAgent();
+  registerAgentRoutes(app, {
+    getAgent: () => services.getActiveSession().agent,
+    ensureAgent,
+    agentSessions,
   });
 
   const port = Number(process.env.PORT ?? 8787);
   const host = process.env.HOST ?? '127.0.0.1';
   try {
     await app.listen({ port, host });
-    console.log(`\n  🚀 NarrativeOS 起草工作台 BFF 已启动: http://${host}:${port}`);
-    console.log(`  📂 当前激活项目: ${services.activeProjectId.value}`);
-    console.log(`  💾 项目库: ${services.session.writingStore ? 'data/projects/<项目>/project.db（融合架构）' : '未装配'}\n`);
+    console.log(`\n  🚀 NarrativeOS BFF 已启动: http://${host}:${port}\n`);
   } catch (err) {
     app.log.error(err);
     process.exit(1);

@@ -41,12 +41,41 @@ function openPalette() {
       </button>
     </div>
 
-    <!-- 右：预留 -->
-    <div class="titlebar-right"></div>
+    <!-- 右：AI 助手入口（VS Code 式右上角小图标） -->
+    <div class="titlebar-right">
+      <button
+        class="titlebar-action"
+        :class="{ 'is-active': ui.agentPanelOpen }"
+        :title="ui.agentPanelOpen ? '收起 AI 助手' : '打开 AI 助手'"
+        @click="ui.toggleAgentPanel"
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <!-- 机器人头：圆顶 + 天线 -->
+          <path d="M12 3a4 4 0 0 0-4 4v1H6a3 3 0 0 0-3 3v6a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-6a3 3 0 0 0-3-3h-2V7a4 4 0 0 0-4-4z" />
+          <path d="M12 3v-1.5" />
+          <circle cx="12" cy="1.5" r="0.8" fill="currentColor" stroke="none" />
+          <!-- 眼睛 -->
+          <circle cx="9" cy="12.5" r="1" fill="currentColor" stroke="none" />
+          <circle cx="15" cy="12.5" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+    </div>
   </header>
 </template>
 
 <style scoped>
+/* 右上角操作按钮（VS Code 式：小图标，hover 浅底，激活高亮） */
+.titlebar-action {
+  width: 28px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3);
+  border-radius: var(--r-sm);
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.titlebar-action:hover { color: var(--text); background: var(--bg-3); }
+.titlebar-action.is-active { color: var(--accent); background: var(--accent-bg); }
+.titlebar-action .ico { width: 16px; height: 16px; }
+
 .titlebar-cmd {
   display: flex; align-items: center; gap: var(--sp-2);
   height: 25px;

@@ -30,6 +30,19 @@ export const useUiStore = defineStore('ui', () => {
   const activeActivity = ref<string>('document-explorer');
   const sidebarHidden = ref(false);
   const panelHidden = ref(true);
+  /** Agent 聊天面板（右侧 panel）是否展开。
+   * 与 panelHidden 联动：panelHidden = !agentPanelOpen。
+   * 单一真相源是 agentPanelOpen，panelHidden 保留是为兼容现有 shell.css 的 .hide-panel 类。 */
+  const agentPanelOpen = ref(false);
+  /** Agent 面板宽度（px），可拖拽调整，localStorage 持久化 */
+  const PANEL_W_KEY = 'narrativeos_panel_width';
+  const PANEL_W_MIN = 280;
+  const PANEL_W_MAX = 720;
+  const agentPanelWidth = ref(Number(localStorage.getItem(PANEL_W_KEY)) || 360);
+  function setAgentPanelWidth(w: number) {
+    agentPanelWidth.value = Math.max(PANEL_W_MIN, Math.min(PANEL_W_MAX, w));
+    localStorage.setItem(PANEL_W_KEY, String(agentPanelWidth.value));
+  }
   const tabs = ref<EditorTab[]>([]);
   const activeTabId = ref<string | null>(null);
   const syncState = ref<'saved' | 'syncing' | 'offline' | 'error'>('saved');
@@ -61,6 +74,15 @@ export const useUiStore = defineStore('ui', () => {
 
   function setActiveActivity(id: string) { activeActivity.value = id; }
   function toggleSidebar() { sidebarHidden.value = !sidebarHidden.value; }
+  /** 切换 Agent 面板开合；同时同步 panelHidden（驱动 shell.css 的 .hide-panel） */
+  function toggleAgentPanel() {
+    agentPanelOpen.value = !agentPanelOpen.value;
+    panelHidden.value = !agentPanelOpen.value;
+  }
+  function openAgentPanel() {
+    agentPanelOpen.value = true;
+    panelHidden.value = false;
+  }
 
   function openTab(tab: EditorTab) {
     const existing = tabs.value.find(t => t.docId === tab.docId);
@@ -96,10 +118,11 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     projects, projectId, projectTitle,
-    activeActivity, sidebarHidden, panelHidden,
+    activeActivity, sidebarHidden, panelHidden, agentPanelOpen,
+    agentPanelWidth, setAgentPanelWidth,
     tabs, activeTabId, syncState, settingsOpen, appSettingsOpen,
     commandPaletteOpen, importRequested,
-    setActiveActivity, toggleSidebar,
+    setActiveActivity, toggleSidebar, toggleAgentPanel, openAgentPanel,
     openSettings, closeSettings, openAppSettings, closeAppSettings,
     openCommandPalette, closeCommandPalette, requestImport,
     openTab, closeTab, renameTab,
