@@ -16,6 +16,8 @@ import { bootstrap } from './bootstrap.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 import { registerAgentRoutes } from './routes/agent.js';
+import { registerEntityRoutes } from './routes/entities.js';
+import { registerGraphRoutes } from './routes/relations.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -34,6 +36,16 @@ async function main() {
   });
   registerDocumentRoutes(app, {
     getDocumentService: () => services.getActiveSession().documentService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 实体卡只读（里程碑②）——entityService / graphService 动态取激活 session 的
+  registerEntityRoutes(app, {
+    getEntityService: () => services.getActiveSession().entityService,
+    makeCtx: services.makeCtx,
+  });
+  registerGraphRoutes(app, {
+    getGraphService: () => services.getActiveSession().graphService,
     makeCtx: services.makeCtx,
   });
 

@@ -11,11 +11,13 @@ import type { Component } from 'vue';
 // 内置插件
 import { documentExplorerManifest } from '../plugins/document-explorer/manifest';
 import { documentEditorManifest } from '../plugins/document-editor/manifest';
+import { entityGraphManifest } from '../plugins/entity-graph/manifest';
 
 /** 全部内置插件（顺序即活动栏默认顺序） */
 const PLUGINS: PluginManifest[] = [
   documentExplorerManifest,
   documentEditorManifest,
+  entityGraphManifest,
 ];
 
 /** 活动栏条目（按 order 排序） */
@@ -34,6 +36,11 @@ export function getPluginByActivity(activityId: string): PluginManifest | undefi
 /** 按 activity id 取其侧栏视图 */
 export function getSideView(activityId: string): Component | undefined {
   return getPluginByActivity(activityId)?.sideView;
+}
+
+/** 按 activity id 取其模块主区视图（模块独占模式） */
+export function getMainView(activityId: string): Component | undefined {
+  return getPluginByActivity(activityId)?.mainView;
 }
 
 /** 按编辑器类型 id 取渲染组件 */

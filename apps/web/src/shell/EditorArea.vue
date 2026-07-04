@@ -6,7 +6,7 @@
 import { computed, ref, nextTick } from 'vue';
 import { useUiStore } from '../stores/ui';
 import { useDocumentStore } from '../stores/document';
-import { getEditorComponent } from './plugin-registry';
+import { getEditorComponent, getMainView, getActivityItems } from './plugin-registry';
 import type { DocumentNode } from './types';
 import ProjectSettingsPage from './ProjectSettingsPage.vue';
 import AppSettingsPage from './AppSettingsPage.vue';
@@ -32,6 +32,14 @@ const editorComp = computed(() => {
   const tab = activeTab.value;
   if (!tab) return undefined;
   return getEditorComponent(tab.editorType);
+});
+
+// 当前活动栏对应的模块主区视图（模块独占模式，如实体关系图谱）
+const mainView = computed(() => getMainView(ui.activeActivity));
+// 模块标题（从活动栏项的 title 取）
+const moduleTitle = computed(() => {
+  const item = getActivityItems().find((a) => a.id === ui.activeActivity);
+  return item?.title ?? '';
 });
 
 function activateTab(docId: string) {
@@ -83,8 +91,12 @@ function onRenameKeydown(e: KeyboardEvent) {
 
 <template>
   <main class="main">
-    <!-- 标签栏：始终渲染（含设置标签） -->
-    <div class="main-head" v-if="ui.tabs.length > 0">
+    <!-- 模块独占模式：显示模块标题栏（无标签） -->
+    <div v-if="mainView" class="main-head module-head">
+      <span class="module-title">{{ moduleTitle }}</span>
+    </div>
+    <!-- 文档/设置模式：标签栏（有标签时显示） -->
+    <div v-else class="main-head" v-if="ui.tabs.length > 0">
       <div class="tabs-row">
         <div
           v-for="tab in ui.tabs"
@@ -114,11 +126,17 @@ function onRenameKeydown(e: KeyboardEvent) {
     </div>
 
     <div class="main-body">
-      <!-- 设置标签：渲染对应设置页（无返回按钮，靠标签 × 关闭） -->
+      <!-- 设置标签：渲染对应设置页（显式标签，最高优先级） -->
       <AppSettingsPage v-if="activeTab?.editorType === 'app-settings'" />
       <ProjectSettingsPage v-else-if="activeTab?.editorType === 'project-settings'" />
 
-      <!-- 文档标签：渲染对应编辑器 -->
+      <!-- 模块独占主区：活动栏切到带 mainView 的模块时，直接渲染（不经标签） -->
+      <component
+        v-else-if="mainView"
+        :is="mainView"
+        :key="ui.activeActivity"
+      />
+      <!-- 文档标签：渲染文档编辑器（需 activeDoc） -->
       <component
         v-else-if="editorComp && activeDoc"
         :is="editorComp"
@@ -169,4 +187,14 @@ function onRenameKeydown(e: KeyboardEvent) {
   color: var(--text-3); font-size: 16px; line-height: 1;
 }
 .tab-close:hover { background: var(--bg-3); color: var(--text); }
+
+/* 模块独占模式：标题栏 */
+.module-head {
+  display: flex; align-items: center;
+  padding: 0 var(--sp-3);
+}
+.module-title {
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text-2);
+  letter-spacing: 0.04em;
+}
 </style>

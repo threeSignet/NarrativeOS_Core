@@ -38,6 +38,9 @@ export interface PluginManifest {
   activity?: ActivityContribution;
   /** 激活时侧栏显示的视图（可选） */
   sideView?: Component;
+  /** 模块主区视图（可选——活动栏切到此插件时，主区直接渲染此组件，不经标签路由）。
+   *  用于"模块独占左右"模式：文档模块走 editorTypes 标签路由，实体关系模块贡献 mainView 独占主区。 */
+  mainView?: Component;
   /** 贡献的编辑器类型（可选） */
   editorTypes?: EditorTypeContribution[];
   /** 插件初始化钩子（可选，App 挂载后调用） */

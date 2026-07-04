@@ -366,6 +366,16 @@ export class EntityService {
   }
 
   /**
+   * 列出全部实体草图（候选 + 已注册 + hint 等所有状态，未软删）。
+   * 供前端实体列表/图谱统一数据源——避免 listCandidateQueue（只看 candidate）
+   * 与 GraphService（含已注册）数据源不一致。
+   * store.listEntitySketches 不传 status 即查全部。
+   */
+  listAllEntitySketches(ctx: WritingRequestContext): WritingEntitySketch[] {
+    return this.store.listEntitySketches(ctx.projectId);
+  }
+
+  /**
    * 查找已注册实体（Agent 构建 factChanges 时获取 Core entity ID）
    */
   findRegisteredEntities(
