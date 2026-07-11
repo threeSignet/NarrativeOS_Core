@@ -259,6 +259,7 @@ export class RelationService {
         chapter: candidate.temporalScope?.fromChapter ?? 1,
         factChanges,
       },
+      coreProposalId: simResult.proposalId,
       coreBridgeResult: { proposalId: simResult.proposalId, isSafeToCommit: simResult.isSafeToCommit },
     });
 
