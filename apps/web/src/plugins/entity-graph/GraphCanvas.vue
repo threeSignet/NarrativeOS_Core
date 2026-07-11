@@ -12,6 +12,8 @@ const ui = useUiStore();
 const entity = useEntityStore();
 
 onMounted(() => { if (ui.projectId) entity.loadGraph(ui.projectId); });
+// 切项目时重新加载图谱（onMounted 只执行一次，切项目不会重新挂载）
+watch(() => ui.projectId, (pid) => { if (pid && ui.activeActivity === 'entity-graph') entity.loadGraph(pid); });
 
 // ===== 力导向布局（极简，无依赖） =====
 interface SimNode extends GraphNode { x: number; y: number; vx: number; vy: number; fixed?: boolean }
@@ -31,22 +33,24 @@ function initSim() {
     const r = Math.min(cw, ch) * 0.25;
     return reactive({ ...n, x: cw/2 + r*Math.cos(angle), y: ch/2 + r*Math.sin(angle), vx: 0, vy: 0 });
   });
-  startSim();
+  runConverge(120);
 }
 
+// 静态布局：initSim 排好后跑固定轮数收敛（不持续 RAF，节点静态不动）
 let rafId = 0;
-let simRunning = false;
-function startSim() {
-  if (simRunning) return;
-  simRunning = true;
+function runConverge(rounds = 120) {
+  cancelAnimationFrame(rafId);
+  let i = 0;
   const tick = () => {
-    if (!simRunning) return;
     step();
-    rafId = requestAnimationFrame(tick);
+    i++;
+    if (i < rounds) { rafId = requestAnimationFrame(tick); }
   };
   rafId = requestAnimationFrame(tick);
 }
-function stopSim() { simRunning = false; cancelAnimationFrame(rafId); }
+// 拖拽后局部重平衡（少量轮数，节点微调后停）
+function startSim() { runConverge(40); }
+function stopSim() { cancelAnimationFrame(rafId); }
 
 function step() {
   const nodes = simNodes.value;

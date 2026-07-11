@@ -18,6 +18,7 @@ import { registerDocumentRoutes } from './routes/documents.js';
 import { registerAgentRoutes } from './routes/agent.js';
 import { registerEntityRoutes } from './routes/entities.js';
 import { registerGraphRoutes } from './routes/relations.js';
+import { registerDecisionRoutes } from './routes/decisions.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -39,9 +40,16 @@ async function main() {
     makeCtx: services.makeCtx,
   });
 
-  // 实体卡只读（里程碑②）——entityService / graphService 动态取激活 session 的
+  // 实体（里程碑②只读 + 里程碑③写入/审核态机）
   registerEntityRoutes(app, {
     getEntityService: () => services.getActiveSession().entityService,
+    getCoreBridge: () => services.getActiveSession().coreBridge,
+    makeCtx: services.makeCtx,
+  });
+  // 待确认决策（里程碑③：confirm_entity 决策确认 → 注册进 Core）
+  registerDecisionRoutes(app, {
+    getWorkflowService: () => services.getActiveSession().workflowService,
+    getCoreBridge: () => services.getActiveSession().coreBridge,
     makeCtx: services.makeCtx,
   });
   registerGraphRoutes(app, {

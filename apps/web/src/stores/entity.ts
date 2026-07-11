@@ -1,8 +1,13 @@
-// Entity store——实体列表 + 关系图谱状态（里程碑②只读）
+// Entity store——实体列表 + 关系图谱 + 审核态机（里程碑②③）
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { listEntities, getEntity, type EntityCard } from '../api/entities';
+import {
+  listEntities, getEntity,
+  createEntity, promoteEntity, approveEntity, registerEntity, deprecateEntity,
+  type EntityCard,
+} from '../api/entities';
 import { getGraph } from '../api/graph';
+import { listDecisions, resolveDecision, type PendingDecision } from '../api/decisions';
 import type { GraphView } from '../api/types';
 
 export const useEntityStore = defineStore('entity', () => {
@@ -100,13 +105,81 @@ export const useEntityStore = defineStore('entity', () => {
     }
   }
 
+  // ===== 写入 action（里程碑③：审核态机）=====
+  const pendingDecisions = ref<PendingDecision[]>([]);
+  const acting = ref(false); // 操作进行中（防重复点击）
+
+  /** 刷新实体列表 + 图谱 + 决策（写入后统一刷新） */
+  async function refreshAll(projectId: string) {
+    await Promise.all([
+      loadEntities(projectId),
+      loadGraph(projectId),
+      loadDecisions(projectId),
+    ]);
+  }
+
+  /** 新建实体（一步到位到 candidate） */
+  async function create(projectId: string, input: { displayName: string; typeLabel: string; summary?: string }) {
+    acting.value = true; error.value = '';
+    try {
+      await createEntity(projectId, input);
+      await refreshAll(projectId);
+    } catch (e) { error.value = (e as Error).message; throw e; }
+    finally { acting.value = false; }
+  }
+
+  /** candidate → approved */
+  async function approve(projectId: string, id: string) {
+    acting.value = true;
+    try { await approveEntity(projectId, id); await refreshAll(projectId); }
+    catch (e) { error.value = (e as Error).message; throw e; }
+    finally { acting.value = false; }
+  }
+
+  /** approved → registered（直接注册，或经决策确认） */
+  async function register(projectId: string, id: string) {
+    acting.value = true;
+    try { await registerEntity(projectId, id); await refreshAll(projectId); }
+    catch (e) { error.value = (e as Error).message; throw e; }
+    finally { acting.value = false; }
+  }
+
+  /** 废弃实体 */
+  async function deprecate(projectId: string, id: string, reason?: string) {
+    acting.value = true;
+    try { await deprecateEntity(projectId, id, reason); await refreshAll(projectId); }
+    catch (e) { error.value = (e as Error).message; throw e; }
+    finally { acting.value = false; }
+  }
+
+  /** 加载待确认决策 */
+  async function loadDecisions(projectId: string) {
+    try {
+      const all = await listDecisions(projectId);
+      pendingDecisions.value = all.filter((d) => d.status === 'open');
+    } catch { pendingDecisions.value = []; }
+  }
+
+  /** 解决决策（confirm_entity + resolve → 触发注册进 Core） */
+  async function resolvePendingDecision(projectId: string, id: string, action: 'resolve' | 'dismiss' = 'resolve') {
+    acting.value = true;
+    try {
+      await resolveDecision(projectId, id, action);
+      await refreshAll(projectId);
+    } catch (e) { error.value = (e as Error).message; throw e; }
+    finally { acting.value = false; }
+  }
+
   function clear() {
     entities.value = []; graph.value = null;
     selectedId.value = null; selected.value = null; error.value = ''; query.value = '';
+    pendingDecisions.value = [];
   }
 
-  return { entities, graph, filteredGraph, selectedId, selected, loading, error,
+  return { entities, graph, filteredGraph, selectedId, selected, loading, error, acting,
     query, hiddenLayers, toggleLayer,
-    filteredEntities, matchedNodeIds,
-    loadEntities, loadGraph, selectEntity, clear };
+    filteredEntities, matchedNodeIds, pendingDecisions,
+    loadEntities, loadGraph, selectEntity, clear,
+    create, approve, register, deprecate,
+    loadDecisions, resolvePendingDecision };
 });
