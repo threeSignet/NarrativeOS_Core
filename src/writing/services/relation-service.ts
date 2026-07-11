@@ -146,6 +146,14 @@ export class RelationService {
     return this.store.listRelationCandidates(ctx.projectId, filter);
   }
 
+  /** 列出关系检测提示（Agent 提取的 hint，前端展示+确认转候选用） */
+  listRelationHints(
+    ctx: WritingRequestContext,
+    filter?: { status?: string },
+  ): RelationDetectionHint[] {
+    return this.store.listRelationHints(ctx.projectId, filter);
+  }
+
   /** 推进候选状态（drafted → submitted） */
   advanceRelationCandidate(
     ctx: WritingRequestContext,
@@ -298,15 +306,28 @@ export class RelationService {
 
     if (result.success) {
       // 推进候选状态 → committed + 存 coreRefs
+      // Bug 修复：predicate 之前塞了 pv.coreProposalId（proposal ID），语义错位。
+      // 改为 candidate.relationTypeId（真正的关系类型标识）。
       const currentCandidate = this.store.getRelationCandidate(relationCandidateId)!;
       this.store.updateRelationCandidate(relationCandidateId, currentCandidate.version, {
         status: 'committed',
         coreRefs: [{
           factId: result.coreEventId ?? '',
-          predicate: pv.coreProposalId ?? '',
+          predicate: candidate.relationTypeId,
           relationKind: '',
         }],
       });
+
+      // Bug 修复：submitRelationCandidate 建的 PendingDecision(confirm_proposal) 之前不 resolve，
+      // 导致待确认面板有悬挂的 open 决策。此处补 resolve。
+      const openDecisions = this.workflow.listPendingDecisions(ctx)
+        .filter((d) => d.status === 'open' && d.linkedObjectId === proposalViewId);
+      for (const d of openDecisions) {
+        this.workflow.resolvePendingDecision(ctx, d.id, {
+          status: 'resolved',
+          note: `coreEventId=${result.coreEventId}`,
+        });
+      }
 
       this.audit.record(ctx, {
         action: 'commit_relation_candidate',

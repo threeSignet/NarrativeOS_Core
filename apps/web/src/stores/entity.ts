@@ -8,6 +8,7 @@ import {
 } from '../api/entities';
 import { getGraph } from '../api/graph';
 import { listDecisions, resolveDecision, type PendingDecision } from '../api/decisions';
+import { createRelation } from '../api/relations';
 import type { GraphView } from '../api/types';
 
 export const useEntityStore = defineStore('entity', () => {
@@ -152,6 +153,19 @@ export const useEntityStore = defineStore('entity', () => {
     finally { acting.value = false; }
   }
 
+  /** 创建关系（一步：createCandidate + submit → 生成待确认决策） */
+  async function createRelationAction(projectId: string, input: {
+    sourceEntityId: string; targetEntityId: string; relationTypeId: string;
+    layer?: string; direction?: string;
+  }) {
+    acting.value = true;
+    try {
+      await createRelation(projectId, input);
+      await refreshAll(projectId);
+    } catch (e) { error.value = (e as Error).message; throw e; }
+    finally { acting.value = false; }
+  }
+
   /** 加载待确认决策 */
   async function loadDecisions(projectId: string) {
     try {
@@ -180,6 +194,6 @@ export const useEntityStore = defineStore('entity', () => {
     query, hiddenLayers, toggleLayer,
     filteredEntities, matchedNodeIds, pendingDecisions,
     loadEntities, loadGraph, selectEntity, clear,
-    create, approve, register, deprecate,
+    create, approve, register, deprecate, createRelationAction,
     loadDecisions, resolvePendingDecision };
 });

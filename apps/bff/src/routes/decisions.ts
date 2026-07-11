@@ -10,18 +10,20 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { WorkflowService } from '../../../../src/writing/services/workflow-service.js';
+import type { RelationService } from '../../../../src/writing/services/relation-service.js';
 import type { CoreBridgeService } from '../../../../src/writing/core-bridge/core-bridge-service.js';
 import type { WritingTrigger } from '../../../../src/writing/services/context.js';
 import { WritingError, WritingErrorCode } from '../../../../src/writing/errors/error-codes.js';
 
 export interface DecisionRouteDeps {
   getWorkflowService: () => WorkflowService;
+  getRelationService: () => RelationService;
   getCoreBridge: () => CoreBridgeService;
   makeCtx: (opts?: { pid?: string; trigger?: WritingTrigger }) => any;
 }
 
 export function registerDecisionRoutes(app: FastifyInstance, deps: DecisionRouteDeps) {
-  const { getWorkflowService, getCoreBridge, makeCtx } = deps;
+  const { getWorkflowService, getRelationService, getCoreBridge, makeCtx } = deps;
 
   const statusFor = (code: string): number => {
     if (code === WritingErrorCode.WRITING_OBJECT_NOT_FOUND) return 404;
@@ -65,6 +67,22 @@ export function registerDecisionRoutes(app: FastifyInstance, deps: DecisionRoute
             : `注册失败：${result.error?.humanMessage ?? '未知'}`,
         });
         return { success: result.success, coreEntityId: result.coreEntityId, error: result.error };
+      }
+
+      // confirm_proposal：确认关系提交 → 写进 Core
+      // decision.linkedObjectId = proposalViewId，需从 PV 找到 relationCandidateId
+      if (action === 'resolve' && decision.kind === 'confirm_proposal' && decision.linkedObjectId) {
+        const pvId = decision.linkedObjectId;
+        // 从候选列表找 linkedObjectId===pvId 的候选（submit 时 PV.sourceRefs 带 candidate id）
+        const candidates = getRelationService().listRelationCandidates(ctx);
+        const candidate = candidates.find((c) => c.status === 'submitted');
+        if (!candidate) {
+          wf.resolvePendingDecision(ctx, id, { status: 'dismissed', note: '找不到对应的提交关系候选' });
+          return { success: false, error: '找不到对应的提交关系候选' };
+        }
+        const result = await getRelationService().confirmRelationCommit(ctx, candidate.id, pvId);
+        // confirmRelationCommit 内部已 resolve PendingDecision（Bug2 修复），不重复 resolve
+        return result;
       }
 
       // 其他决策或 dismiss：仅 resolve，不触发注册

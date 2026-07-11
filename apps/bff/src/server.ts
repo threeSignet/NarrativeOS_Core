@@ -46,14 +46,16 @@ async function main() {
     getCoreBridge: () => services.getActiveSession().coreBridge,
     makeCtx: services.makeCtx,
   });
-  // 待确认决策（里程碑③：confirm_entity 决策确认 → 注册进 Core）
+  // 待确认决策（里程碑③实体注册 + 里程碑④a关系提交确认）
   registerDecisionRoutes(app, {
     getWorkflowService: () => services.getActiveSession().workflowService,
+    getRelationService: () => services.getActiveSession().relationService,
     getCoreBridge: () => services.getActiveSession().coreBridge,
     makeCtx: services.makeCtx,
   });
   registerGraphRoutes(app, {
     getGraphService: () => services.getActiveSession().graphService,
+    getRelationService: () => services.getActiveSession().relationService,
     makeCtx: services.makeCtx,
   });
 

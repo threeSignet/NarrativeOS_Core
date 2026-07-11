@@ -6,6 +6,7 @@ import { useEntityStore } from '../../stores/entity';
 import { useToast } from '../../composables/useToast';
 import type { EntityCard } from '../../api/entities';
 import { GRAPH_LAYER_META, ENTITY_KIND_LABELS } from '../../utils/entityKinds';
+import { RELATION_TYPE_OPTIONS } from '../../utils/relationTypes';
 
 const ui = useUiStore();
 const entity = useEntityStore();
@@ -54,6 +55,33 @@ async function onCreate() {
   }
 }
 
+// ===== 新建关系表单 =====
+const showCreateRel = ref(false);
+const relForm = ref({ sourceId: '', targetId: '', relationTypeId: 'siblings' });
+// 已注册实体列表（关系两端必须已注册 Core 的实体）
+const registeredEntities = computed(() => entity.entities.filter((e) => e.status === 'registered'));
+
+async function onCreateRelation() {
+  if (!ui.projectId || !relForm.value.sourceId || !relForm.value.targetId) return;
+  if (relForm.value.sourceId === relForm.value.targetId) {
+    toast.error('源实体和目标实体不能相同'); return;
+  }
+  try {
+    await entity.createRelationAction(ui.projectId, {
+      sourceEntityId: relForm.value.sourceId,
+      targetEntityId: relForm.value.targetId,
+      relationTypeId: relForm.value.relationTypeId,
+      layer: 'world',
+      direction: 'bidirectional',
+    });
+    toast.success('关系已创建，请在待确认面板确认');
+    relForm.value = { sourceId: '', targetId: '', relationTypeId: 'siblings' };
+    showCreateRel.value = false;
+  } catch (e: any) {
+    toast.error('创建关系失败：' + (e?.response?.data?.error || e?.message));
+  }
+}
+
 // ===== 审核操作 =====
 async function onApprove(e: EntityCard) {
   if (!ui.projectId) return;
@@ -86,7 +114,29 @@ async function onResolveDecision(id: string) {
       <button class="icon-btn" title="新建实体" @click="showCreate = !showCreate">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
       </button>
+      <button class="icon-btn" title="新建关系" :disabled="registeredEntities.length < 2" @click="showCreateRel = !showCreateRel">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 12h8"/></svg>
+      </button>
       <span v-if="entity.entities.length" class="entity-count">{{ entity.entities.length }}</span>
+    </div>
+  </div>
+
+  <!-- 新建关系表单 -->
+  <div v-if="showCreateRel" class="create-form">
+    <select v-model="relForm.sourceId" class="form-input">
+      <option value="" disabled>选择源实体…</option>
+      <option v-for="e in registeredEntities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.typeLabel }}）</option>
+    </select>
+    <select v-model="relForm.targetId" class="form-input">
+      <option value="" disabled>选择目标实体…</option>
+      <option v-for="e in registeredEntities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.typeLabel }}）</option>
+    </select>
+    <select v-model="relForm.relationTypeId" class="form-input">
+      <option v-for="r in RELATION_TYPE_OPTIONS" :key="r.value" :value="r.value">{{ r.label }}</option>
+    </select>
+    <div class="form-actions">
+      <button class="btn btn--sm" @click="showCreateRel = false">取消</button>
+      <button class="btn btn--sm btn--primary" :disabled="!relForm.sourceId || !relForm.targetId || relForm.sourceId === relForm.targetId || entity.acting" @click="onCreateRelation">创建关系</button>
     </div>
   </div>
 
