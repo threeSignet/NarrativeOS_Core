@@ -55,7 +55,7 @@
 
 | 迭代 | 主题 | 涉及 service | 完成标准 | 状态 |
 |---|---|---|---|---|
-| D1 | SceneService 接前端：场景卡 | scene | 场景列表 + 目标/冲突/结果 + 关联章节 | 待开始 |
+| D1 | SceneService 接前端：场景卡 | scene | 场景列表 + 目标/冲突/结果 + 关联章节 | ✅ 完成 |
 | D2 | RevisionService 接前端：修订记录 | revision | 修订历史查看 + 版本组 + 恢复 | 待开始 |
 | D3 | StyleService 接前端：风格指南 | style | 风格指南/示例/禁用表达只读 | 待开始 |
 | D4 | RetconViewService 接前端：追溯修改 | retcon | 影响报告只读视图 | 待开始 |
@@ -181,6 +181,21 @@
 **★ 阶段 C 完结**：伏笔(C1) + 时间线(C2) + 读者(C3) + 空间(C4) 四大一致性能力全部接前端。前端覆盖 service 数：14/23
 
 **下一步**：B2（BlueprintService 蓝图只读）或 D1（SceneService 场景卡）
+
+### 迭代 D1 · SceneService 接前端（场景卡）✅（2026-07-17）
+
+**做了什么**：
+- 后端：SceneService 补 `listScenes`/`getScene` 方法
+- BFF：`apps/bff/src/routes/scenes.ts`（5 端点：GET 列表+单个 + POST 创建 + PATCH 更新 + POST 状态推进），server.ts 注册
+- 前端：`api/scenes.ts`（ScenePlan 类型 + Purpose 8种/Status 6态中文标签/颜色 + nextSceneStatus）+ `stores/scene.ts`（load/create/edit/transition + groupedByChapter 复用 chapter store 章节标题）
+- 插件：`scene-board`（分镜板图标 + SceneListView 侧栏[按章节分组/新建选章节/purpose 标签/状态推进] + SceneDetailView 主区[标题/purpose 芯片多选/POV 下拉/预期结果]）+ manifest（order=9）
+
+**跨模块联动**：场景归属章节，侧栏分组复用 chapter store 的章节标题；POV 下拉复用 entity store 已注册实体
+
+**验证**：vue-tsc 0 错；Playwright 9/9（创建归入章节分组/选中详情/8功能芯片/POV下拉/状态推进/无异常）
+
+**下一步**：D2（RevisionService 修订记录）或 B2（蓝图只读）
+
 
 
 

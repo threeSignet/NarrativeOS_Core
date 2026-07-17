@@ -26,6 +26,7 @@ import { registerForeshadowingRoutes } from './routes/foreshadowings.js';
 import { registerTimelineRoutes } from './routes/timelines.js';
 import { registerReaderRoutes } from './routes/readers.js';
 import { registerSpatialRoutes } from './routes/spatials.js';
+import { registerSceneRoutes } from './routes/scenes.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -105,6 +106,12 @@ async function main() {
   // 空间地图（迭代 C4）——§9 地理/空间树状只读视图，不写 Core
   registerSpatialRoutes(app, {
     getSpatialViewService: () => services.getActiveSession().spatialViewService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 场景卡（迭代 D1）——§14.3 场景规划，不写 Core
+  registerSceneRoutes(app, {
+    getSceneService: () => services.getActiveSession().sceneService,
     makeCtx: services.makeCtx,
   });
 

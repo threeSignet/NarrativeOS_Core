@@ -140,4 +140,14 @@ export class SceneService {
       detail: { count: orderedIds.length },
     });
   }
+
+  /** 列出场景（可按章节过滤） */
+  listScenes(ctx: WritingRequestContext, chapterId?: string): ScenePlan[] {
+    return this.store.listScenePlans(ctx.projectId, chapterId ? { chapterId } : undefined);
+  }
+
+  /** 获取单个场景 */
+  getScene(ctx: WritingRequestContext, id: string): ScenePlan | undefined {
+    return this.store.getScenePlan(id);
+  }
 }
