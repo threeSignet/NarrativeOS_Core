@@ -77,6 +77,27 @@ export const useChapterStore = defineStore('chapter', () => {
     }
   }
 
+  /** 编辑章节元信息（goals/povEntityId/title），乐观锁 */
+  async function editMeta(
+    projectId: string,
+    id: string,
+    updates: { goals?: string[]; povEntityId?: string; title?: string },
+  ) {
+    const ch = chapters.value.find((c) => c.id === id);
+    if (!ch) return;
+    acting.value = true; error.value = '';
+    try {
+      const updated = await updateChapter(projectId, id, ch.version, updates);
+      const idx = chapters.value.findIndex((c) => c.id === id);
+      if (idx >= 0) chapters.value[idx] = updated;
+    } catch (e: any) {
+      error.value = e?.response?.data?.error ?? e?.message ?? '保存失败';
+      throw e;
+    } finally {
+      acting.value = false;
+    }
+  }
+
   /** 推进章节状态 */
   async function transition(projectId: string, id: string, target: ChapterStatus) {
     acting.value = true; error.value = '';
@@ -179,7 +200,7 @@ export const useChapterStore = defineStore('chapter', () => {
   return {
     chapters, selectedId, loading, error, acting,
     activeProseText, activeProseDocId, proseSync,
-    selected, loadChapters, select, create, rename, transition, reorder,
+    selected, loadChapters, select, create, rename, editMeta, transition, reorder,
     getOrCreateProse, saveProse, clear,
   };
 });

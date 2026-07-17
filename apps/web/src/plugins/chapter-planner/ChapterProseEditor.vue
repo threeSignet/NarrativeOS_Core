@@ -15,14 +15,24 @@ import { useEditor, EditorContent } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import { useUiStore } from '../../stores/ui';
 import { useChapterStore } from '../../stores/chapter';
+import { useEntityStore } from '../../stores/entity';
 import { useToast } from '../../composables/useToast';
-import { UiButton, UiIcon } from '../../components';
+import { UiButton, UiIcon, UiInput } from '../../components';
 import { contentStringToMarkdown, plainTextToTiptapDoc } from '../../utils/tiptapConvert';
 import EditorToolbar from '../document-editor/EditorToolbar.vue';
 
 const ui = useUiStore();
 const chapter = useChapterStore();
+const entity = useEntityStore();
 const toast = useToast();
+
+// 已注册实体（POV 下拉用）。加载一次，切到章节活动栏时
+const registeredEntities = computed(() => entity.entities.filter((e) => e.status === 'registered'));
+async function ensureEntitiesLoaded() {
+  if (ui.projectId && entity.entities.length === 0) {
+    await entity.loadEntities(ui.projectId);
+  }
+}
 
 const editor = useEditor({
   content: '',
@@ -66,9 +76,54 @@ watch(() => editor.value, (ed) => {
   ed.on('update', scheduleSave);
 }, { immediate: true });
 
+const activeChapter = computed(() => chapter.selected());
+
+// 章节规划编辑：goals（标签式）+ POV（实体下拉）
+const goalInput = ref('');
+const showInfoBar = ref(true);
+
+function addGoal() {
+  const g = goalInput.value.trim();
+  if (!g || !activeChapter.value || activeChapter.value.goals.includes(g)) return;
+  activeChapter.value.goals.push(g);
+  goalInput.value = '';
+  void saveChapterMeta();
+}
+function removeGoal(g: string) {
+  if (!activeChapter.value) return;
+  activeChapter.value.goals = activeChapter.value.goals.filter((x) => x !== g);
+  void saveChapterMeta();
+}
+function onGoalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') { e.preventDefault(); addGoal(); }
+  else if (e.key === 'Backspace' && !goalInput.value && activeChapter.value?.goals.length) {
+    activeChapter.value.goals.pop();
+    void saveChapterMeta();
+  }
+}
+async function onPovChange(e: Event) {
+  if (!activeChapter.value) return;
+  activeChapter.value.povEntityId = (e.target as HTMLSelectElement).value || undefined;
+  void saveChapterMeta();
+}
+
+/** 保存章节元信息（goals/povEntityId/title），乐观锁 */
+async function saveChapterMeta() {
+  if (!ui.projectId || !activeChapter.value) return;
+  try {
+    await chapter.editMeta(ui.projectId, activeChapter.value.id, {
+      goals: activeChapter.value.goals,
+      povEntityId: activeChapter.value.povEntityId,
+    });
+  } catch (e: any) {
+    toast.error('章节信息保存失败：' + (e?.message || '版本冲突'));
+  }
+}
+
 // 选中章节变化时加载正文
 watch(() => chapter.selectedId, async (id, oldId) => {
   if (!id || id === oldId || !ui.projectId) return;
+  void ensureEntitiesLoaded(); // POV 下拉需要已注册实体
   if (editor.value) editor.value.commands.setContent('');
   activeProseText.value = '';
   try {
@@ -97,6 +152,45 @@ function focusEditor() {
 
 <template>
   <div class="prose-editor-wrap">
+    <!-- 章节规划信息条：标题 + goals 标签 + POV 下拉（可折叠） -->
+    <div v-if="activeChapter" class="chapter-info-bar">
+      <div class="info-bar-head">
+        <span class="info-chapter-label">第 {{ activeChapter.order }} 章</span>
+        <span class="info-chapter-title">{{ activeChapter.title }}</span>
+        <UiButton icon variant="ghost" size="sm" :title="showInfoBar ? '收起规划' : '展开规划'" @click="showInfoBar = !showInfoBar">
+          <UiIcon :name="showInfoBar ? 'chevron-down' : 'chevron-right'" :size="14" />
+        </UiButton>
+      </div>
+      <div v-if="showInfoBar" class="info-bar-body">
+        <div class="info-field">
+          <label class="info-label">章节目标</label>
+          <div class="goals-box">
+            <span v-for="g in activeChapter.goals" :key="g" class="goal-chip">
+              {{ g }}
+              <button class="goal-remove" title="移除" @click="removeGoal(g)">×</button>
+            </span>
+            <input
+              v-model="goalInput"
+              class="goal-input"
+              placeholder="输入目标回车添加…"
+              @keydown="onGoalKeydown"
+            />
+          </div>
+        </div>
+        <div class="info-field">
+          <label class="info-label">POV 视角</label>
+          <select
+            class="pov-select"
+            :value="activeChapter.povEntityId ?? ''"
+            @change="onPovChange"
+          >
+            <option value="">无（上帝视角）</option>
+            <option v-for="e in registeredEntities" :key="e.id" :value="e.id">{{ e.name }}（{{ e.typeLabel }}）</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <EditorToolbar :editor="editor" />
     <div class="prose-editor-scroll" @click="focusEditor">
       <EditorContent :editor="editor" />
@@ -115,6 +209,51 @@ function focusEditor() {
   background: var(--editor-bg);
   position: relative;
 }
+
+/* 章节规划信息条 */
+.chapter-info-bar {
+  flex-shrink: 0;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.info-bar-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  max-width: var(--editor-width, 720px); margin: 0 auto; width: 100%;
+}
+.info-chapter-label { font-size: var(--fs-xs); color: var(--text-3); font-family: var(--font-mono); }
+.info-chapter-title { font-size: var(--fs-md); font-weight: 500; color: var(--text); flex: 1; }
+.info-bar-body {
+  display: flex; gap: var(--sp-4);
+  padding: 0 var(--sp-4) var(--sp-3);
+  max-width: var(--editor-width, 720px); margin: 0 auto; width: 100%;
+  flex-wrap: wrap;
+}
+.info-field { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 4px; }
+.info-label { font-size: var(--fs-xs); color: var(--text-3); font-weight: 600; }
+.goals-box {
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 4px 6px; min-height: 30px;
+}
+.goal-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-xs); padding: 2px 8px;
+  background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--accent-border); border-radius: var(--r-pill);
+}
+.goal-remove { font-size: 14px; line-height: 1; color: var(--text-3); cursor: pointer; }
+.goal-remove:hover { color: var(--danger); }
+.goal-input {
+  flex: 1; min-width: 120px; background: transparent; border: none; outline: none;
+  font-size: var(--fs-sm); color: var(--text); font-family: inherit;
+}
+.pov-select {
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 4px 8px; font-size: var(--fs-sm); color: var(--text); font-family: inherit;
+}
+.pov-select:focus { outline: none; border-color: var(--border-focus); }
+
 .prose-editor-scroll {
   flex: 1; overflow-y: auto;
   display: flex; justify-content: center;
