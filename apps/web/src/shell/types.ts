@@ -4,8 +4,9 @@
 // 每个内置插件导出一个 PluginManifest，声明它贡献了什么：
 //   - activity: 活动栏一个图标入口
 //   - sideView: 该激活时侧栏显示的视图组件
+//   - mainView: 模块独占主区视图（活动栏切换时直接渲染，不经标签路由）
+//   - panelView: 右侧 dock 面板视图（独立于活动栏，如 AI 助手）
 //   - editorTypes: 该插件能渲染的编辑器类型（点不同文档开不同编辑器）
-//   - commands: 贡献的命令（未来命令面板用）
 // 空壳（shell）只认这些声明，不 import 任何业务逻辑——加插件不动 shell。
 
 import type { Component } from 'vue';
@@ -41,6 +42,11 @@ export interface PluginManifest {
   /** 模块主区视图（可选——活动栏切到此插件时，主区直接渲染此组件，不经标签路由）。
    *  用于"模块独占左右"模式：文档模块走 editorTypes 标签路由，实体关系模块贡献 mainView 独占主区。 */
   mainView?: Component;
+  /** 右侧面板视图（可选——独立于活动栏，由 App 经 registry 查询后用 <component :is> 渲染）。
+   *  与 sideView 对称：sideView 挂左侧栏，panelView 挂右侧 dock。开关由全局状态控制
+   *  （如 ui.agentPanelOpen），不走活动栏路由。
+   *  典型用法：agent-panel 贡献 AI 助手聊天面板。 */
+  panelView?: Component;
   /** 贡献的编辑器类型（可选） */
   editorTypes?: EditorTypeContribution[];
   /** 插件初始化钩子（可选，App 挂载后调用） */

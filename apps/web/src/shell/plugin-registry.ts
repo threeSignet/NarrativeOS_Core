@@ -12,12 +12,14 @@ import type { Component } from 'vue';
 import { documentExplorerManifest } from '../plugins/document-explorer/manifest';
 import { documentEditorManifest } from '../plugins/document-editor/manifest';
 import { entityGraphManifest } from '../plugins/entity-graph/manifest';
+import { agentPanelManifest } from '../plugins/agent-panel/manifest';
 
-/** 全部内置插件（顺序即活动栏默认顺序） */
+/** 全部内置插件（顺序即活动栏默认顺序；panelView 类插件不进活动栏，放末尾） */
 const PLUGINS: PluginManifest[] = [
   documentExplorerManifest,
   documentEditorManifest,
   entityGraphManifest,
+  agentPanelManifest,
 ];
 
 /** 活动栏条目（按 order 排序） */
@@ -41,6 +43,13 @@ export function getSideView(activityId: string): Component | undefined {
 /** 按 activity id 取其模块主区视图（模块独占模式） */
 export function getMainView(activityId: string): Component | undefined {
   return getPluginByActivity(activityId)?.mainView;
+}
+
+/** 取右侧面板视图——返回第一个声明 panelView 的插件（当前仅 agent-panel）。
+ *  与 sideView 对称，但 panelView 不绑定 activity，是全局唯一 dock。
+ *  App.vue 经此查询渲染右侧面板，不硬编码 import 任何插件组件。 */
+export function getPanelView(): Component | undefined {
+  return PLUGINS.find(p => p.panelView)?.panelView;
 }
 
 /** 按编辑器类型 id 取渲染组件 */

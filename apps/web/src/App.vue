@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // App 根：装配 VS Code 式空壳，多项目启动，全局 Toast/Confirm/命令面板 挂载
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { onMounted, onBeforeUnmount, ref, computed } from 'vue';
 import TitleBar from './shell/TitleBar.vue';
 import ActivityBar from './shell/ActivityBar.vue';
 import SideBar from './shell/SideBar.vue';
@@ -9,11 +9,10 @@ import StatusBar from './shell/StatusBar.vue';
 import ToastContainer from './shell/ToastContainer.vue';
 import ConfirmDialog from './shell/ConfirmDialog.vue';
 import CommandPalette from './shell/CommandPalette.vue';
-import AgentPanel from './plugins/agent-panel/AgentPanel.vue';
 import { useUiStore } from './stores/ui';
 import { useDocumentStore } from './stores/document';
 import { useLocalDraftsStore } from './stores/localDrafts';
-import { activateAllPlugins } from './shell/plugin-registry';
+import { activateAllPlugins, getPanelView } from './shell/plugin-registry';
 import { syncEngine } from './services/sync-engine';
 import { listProjects } from './api/projects';
 import { listDocuments } from './api/documents';
@@ -23,6 +22,10 @@ const ui = useUiStore();
 const docs = useDocumentStore();
 const local = useLocalDraftsStore();
 const toast = useToast();
+
+// 右侧面板组件：经 registry 查询（不再硬编码 import AgentPanel）。
+// 面板开关由 ui.agentPanelOpen 控制，宽度由 ui.agentPanelWidth 驱动。
+const panelView = computed(() => getPanelView());
 
 // 全局快捷键：Cmd/Ctrl+K 打开命令面板（IME 组合输入中屏蔽，避免误触发）
 function onGlobalKeydown(e: KeyboardEvent) {
@@ -116,7 +119,7 @@ onBeforeUnmount(() => {
       @mousedown="startResize"
     ></div>
     <aside class="panel" aria-hidden="true">
-      <AgentPanel v-if="ui.agentPanelOpen" />
+      <component :is="panelView" v-if="ui.agentPanelOpen && panelView" />
     </aside>
     <StatusBar />
   </div>
