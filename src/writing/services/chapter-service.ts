@@ -23,6 +23,16 @@ export class ChapterService {
     private audit: AuditService,
   ) {}
 
+  /** 列出项目的全部章节规划（按 order 升序） */
+  listChapters(ctx: WritingRequestContext): ChapterPlan[] {
+    return this.store.listChapterPlans(ctx.projectId).sort((a, b) => a.order - b.order);
+  }
+
+  /** 获取单个章节规划 */
+  getChapter(ctx: WritingRequestContext, id: string): ChapterPlan | undefined {
+    return this.store.getChapterPlan(id);
+  }
+
   /** 创建章节规划 */
   createChapter(
     ctx: WritingRequestContext,

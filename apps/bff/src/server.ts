@@ -19,6 +19,7 @@ import { registerAgentRoutes } from './routes/agent.js';
 import { registerEntityRoutes } from './routes/entities.js';
 import { registerGraphRoutes } from './routes/relations.js';
 import { registerDecisionRoutes } from './routes/decisions.js';
+import { registerChapterRoutes } from './routes/chapters.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -56,6 +57,12 @@ async function main() {
   registerGraphRoutes(app, {
     getGraphService: () => services.getActiveSession().graphService,
     getRelationService: () => services.getActiveSession().relationService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 章节规划（迭代 A1）——§14.2 写作层叙事组织，不写 Core
+  registerChapterRoutes(app, {
+    getChapterService: () => services.getActiveSession().chapterService,
     makeCtx: services.makeCtx,
   });
 
