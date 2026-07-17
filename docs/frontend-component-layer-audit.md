@@ -138,14 +138,25 @@
 - **右键菜单**:UiContextMenu 弹出含[新建文件夹/新建文档/重命名/归档],点外部关闭
 - **全流程无未捕获异常**
 
-### 未覆盖的纯视觉项(需人工肉眼)
+### 第三轮:写流程端到端(8/8 通过)
 
-以下为肉眼主观判断,自动化难以断言,建议人工快速确认:
-- 图谱整体美感/布局舒展度
-- 颜色主题在深色/浅色下的观感
-- 动画过渡的顺滑度(虽已验证节点不弹动)
+脚本:`scripts/verify-write-flow.mjs`,覆盖计划节点 5 的核心验收链路:
+- **新建实体**:点 + → UiInlineForm 展开 → 填名 → 创建 → 列表增加(4→5)→ 新实体出现
+- **批准**:candidate 态实体行有"批准"按钮 → 点击成功
+- **注册进 Core**:approved 态出现"注册"按钮 → 点击成功
+- **图谱节点增加**:注册后图谱节点数增加(2→3)
+- **无异常**
 
-> **验证命令**:`cd /tmp/verify-browser && npm i playwright-core && cp <项目>/scripts/verify-*.mjs . && node verify-runtime.mjs && node verify-interactions.mjs`(需先启动 `pnpm dev`)
+> **发现并修复的遗留问题**:验证写流程时暴露 `灰域行者/project.db` 的 `writing_entity_sketches` 等 22 张表缺 `version` 列(W3 乐观锁加列时 CREATE TABLE IF NOT EXISTS 不更新已存在的表)。这是**预先存在的 schema 迁移机制缺陷**,非本次前端基建引入(本次 7 个提交零后端改动)。已对开发库执行 ALTER TABLE 补列,写流程随即跑通。根因(无正式迁移机制)记入技术债。
+
+### 累计:三轮 54/54 全部通过
+
+| 轮次 | 脚本 | 检查数 | 通过 | 覆盖 |
+|---|---|---|---|---|
+| 1 | verify-runtime.mjs | 32 | 32 | 基础渲染 + 契约 + 边标签中文 + 节点静止 |
+| 2 | verify-interactions.mjs | 14 | 14 | 拖拽/悬停/过滤/缩放/新建/右键菜单 |
+| 3 | verify-write-flow.mjs | 8 | 8 | 新建实体→批准→注册进 Core→图谱节点增加 |
+| **合计** | — | **54** | **54** | — |
 
 ## 八、遗留技术债（非本次范围）
 
@@ -153,3 +164,4 @@
 2. **chunk 大小警告**：index.js 574KB（主要是 TipTap），与本次迁移无关，既有问题
 3. **UiIcon 图标集非完整**：当前收录 30 个图标（从现有插件提取）。未来新插件若需新图标，往 ICON_PATHS 字典加一行即可
 4. **UiContextMenu 边界溢出**：computed pos 当前直接用 props.x/y，未做屏幕边界修正（右键菜单靠近右/下边缘时可能溢出）。当前 document-explorer 只有一种右键场景，影响小；未来多场景用时需补边界检测
+5. **★ schema 迁移机制缺失(运行时验证发现,P0)**:`CREATE TABLE IF NOT EXISTS` 不更新已存在的表,导致 W3 加的 `version` 列在旧开发库(`灰域行者/project.db`)缺失,22 张表受影响,新建实体/关系等写操作报 `no such column: version`。本次已对开发库 ALTER TABLE 应急补列,但根因未解——需要正式的迁移机制(如版本号 + ALTER 脚本,或启动时 schema 比对自动补列)。这是项目级技术债,优先级高于其他项,因为任何 schema 变更都会让既有项目库写操作瘫痪
