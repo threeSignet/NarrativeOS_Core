@@ -220,13 +220,8 @@ async function onResolveDecision(id: string) {
 .state-msg { padding: var(--sp-3); font-size: var(--fs-sm); color: var(--text-3); }
 .state-msg.is-error { color: var(--warning); }
 
-/* 实体分组标题（与全局 .side-group 一致，scoped 保留确保上下文隔离） */
-.side-group {
-  font-size: var(--fs-xs); font-weight: 600;
-  letter-spacing: 0.05em; text-transform: uppercase;
-  color: var(--text-3);
-  padding: var(--sp-3) var(--sp-3) var(--sp-1);
-}
+/* .side-group 用全局定义（shell.css），不再 scoped 重写（消除双轨） */
+
 /* 实体行 */
 .entity-row {
   display: flex; align-items: center; gap: var(--sp-2);

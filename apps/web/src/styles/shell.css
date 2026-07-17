@@ -162,51 +162,12 @@
   background: var(--accent);
 }
 
-.side-head {
-  height: var(--h-main-header); flex-shrink: 0;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 var(--sp-3);
-  border-bottom: 1px solid var(--border);
-}
-.side-title {
-  font-size: var(--fs-xs); font-weight: 600;
-  letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--text-2);
-}
-.side-actions { display: flex; gap: 2px; }
-.icon-btn {
-  width: 24px; height: 24px;
-  display: inline-flex; align-items: center; justify-content: center;
-  color: var(--text-3); border-radius: var(--r-sm);
-  transition: color var(--t-fast), background var(--t-fast);
-}
-.icon-btn:hover { color: var(--text); background: var(--bg-3); }
-.icon-btn .ico { width: 15px; height: 15px; }
-
-.side-body { flex: 1; overflow-y: auto; }
-
-/* 侧栏搜索框 */
-.side-search { margin: var(--sp-2) var(--sp-2) var(--sp-1); position: relative; }
-.side-search input {
-  width: 100%; background: var(--bg-input);
-  border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: 5px 8px 5px 26px; font-size: var(--fs-sm); color: var(--text);
-}
-.side-search input:focus { outline: none; border-color: var(--border-focus); }
-.side-search .ico {
-  position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
-  width: 14px; height: 14px; color: var(--text-3);
-}
+/* .side-head / .side-title / .side-actions / .side-body / .side-search
+   已由 UiSideHead / UiSideBody / UiSearchBar 接管，全局类删除。
+   .side-group 保留（EntityGraphSideView 等分组标题用，未来插件复用）。 */
 
 .filter-row { display: flex; flex-wrap: wrap; gap: 4px; padding: var(--sp-2); }
-.filter-chip {
-  font-size: var(--fs-xs); padding: 2px 8px;
-  border-radius: var(--r-pill); border: 1px solid var(--border-2);
-  color: var(--text-2); background: transparent;
-  transition: all var(--t-fast);
-}
-.filter-chip:hover { color: var(--text); border-color: var(--text-3); }
-.filter-chip.is-on { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border); }
+/* .filter-chip 已由 UiChip 接管，全局类删除 */
 
 .side-group {
   font-size: var(--fs-xs); font-weight: 600;
@@ -251,11 +212,8 @@
 @keyframes sb-pulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
 
 /* ===== 通用组件 ===== */
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
-.status-dot--committed { background: var(--st-committed); }
-.status-dot--candidate { background: var(--st-candidate); }
-.status-dot--draft     { background: var(--st-draft); }
-.status-dot--hint      { background: var(--st-hint); }
+/* .status-dot / .status-dot--* 已由 UiStatusDot 接管，全局类删除
+   （--st-* 主题色变量保留在 tokens.css，UiStatusDot 引用） */
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -272,13 +230,7 @@
 .btn--ghost:hover { background: var(--bg-3); color: var(--text); border-color: transparent; }
 .btn--sm { padding: 3px 8px; font-size: var(--fs-xs); }
 
-.chip {
-  font-family: var(--font-mono); font-size: var(--fs-xs);
-  padding: 1px 7px; border-radius: var(--r-sm);
-  background: var(--bg-3); color: var(--text-2);
-  border: 1px solid var(--border);
-}
-.chip--accent { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-border); }
+/* .chip / .chip--accent 已由 UiBadge/UiChip 接管，全局类删除 */
 
 /* 空状态 */
 .empty-state {
