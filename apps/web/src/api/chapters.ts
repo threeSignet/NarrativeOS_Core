@@ -17,6 +17,8 @@ export interface ChapterPlan {
   linkedSceneIds: string[];
   linkedThreadIds: string[];
   linkedDraftIds: string[];
+  /** 关联的正文文档 ID（一章一正文，迭代 A2） */
+  proseDocumentId?: string;
   status: ChapterStatus;
   version: number;
   createdAt: string;
@@ -67,7 +69,7 @@ export async function updateChapter(
   projectId: string,
   id: string,
   expectedVersion: number,
-  updates: Partial<Pick<ChapterPlan, 'title' | 'goals' | 'povEntityId' | 'order'>>,
+  updates: Partial<Pick<ChapterPlan, 'title' | 'goals' | 'povEntityId' | 'order' | 'proseDocumentId'>>,
 ): Promise<ChapterPlan> {
   const { data } = await http.patch<ChapterPlan>(`/projects/${projectId}/chapters/${id}`, {
     expectedVersion,

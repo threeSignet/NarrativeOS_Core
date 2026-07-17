@@ -10,6 +10,7 @@ import {
   type ChapterPlan,
   type ChapterStatus,
 } from '../api/chapters';
+import { getProseDocument, createProseDocument, blocksToMarkdown, ingestProseText } from '../api/prose';
 
 export const useChapterStore = defineStore('chapter', () => {
   const chapters = ref<ChapterPlan[]>([]);
@@ -18,6 +19,12 @@ export const useChapterStore = defineStore('chapter', () => {
   const error = ref('');
   /** 写操作进行中（防重复点击） */
   const acting = ref(false);
+  /** 当前打开章节的正文 Markdown（A2：点章节 → 加载/创建正文 → 编辑器读写） */
+  const activeProseText = ref('');
+  /** 当前打开的正文文档 id（关联到 selectedId 对应章节的 proseDocumentId） */
+  const activeProseDocId = ref<string | null>(null);
+  /** 正文保存状态 */
+  const proseSync = ref<'saved' | 'syncing' | 'error'>('saved');
 
   const selected = () => chapters.value.find((c) => c.id === selectedId.value) ?? null;
 
@@ -106,14 +113,73 @@ export const useChapterStore = defineStore('chapter', () => {
     }
   }
 
+  /**
+   * 打开某章节的正文：若章节有 proseDocumentId 则读取，否则创建空文档并回填关联。
+   * 返回正文 Markdown 串供编辑器初始化。
+   * A2 核心联动逻辑：章节 ↔ 正文 一对一。
+   */
+  async function getOrCreateProse(projectId: string, chapterId: string): Promise<string> {
+    const ch = chapters.value.find((c) => c.id === chapterId);
+    if (!ch) throw new Error('章节不存在');
+    acting.value = true; error.value = '';
+    try {
+      // 已有正文文档 → 读取块转 Markdown
+      if (ch.proseDocumentId) {
+        const withBlocks = await getProseDocument(projectId, ch.proseDocumentId);
+        activeProseDocId.value = withBlocks.document.id;
+        activeProseText.value = blocksToMarkdown(withBlocks.blocks);
+        proseSync.value = 'saved';
+        return activeProseText.value;
+      }
+      // 无正文文档 → 创建空文档，标题沿用章节标题，回填 proseDocumentId 到章节
+      const doc = await createProseDocument(projectId, { title: ch.title });
+      await updateChapter(projectId, chapterId, ch.version, { proseDocumentId: doc.id });
+      // 更新本地章节的 proseDocumentId + version
+      const idx = chapters.value.findIndex((c) => c.id === chapterId);
+      if (idx >= 0) {
+        chapters.value[idx] = { ...chapters.value[idx]!, proseDocumentId: doc.id, version: ch.version + 1 };
+      }
+      activeProseDocId.value = doc.id;
+      activeProseText.value = '';
+      proseSync.value = 'saved';
+      return '';
+    } catch (e: any) {
+      error.value = e?.response?.data?.error ?? e?.message ?? '正文加载失败';
+      proseSync.value = 'error';
+      throw e;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** 保存正文（全量替换语义）。防抖由调用方（编辑器）负责。 */
+  async function saveProse(projectId: string, text: string): Promise<void> {
+    if (!activeProseDocId.value) return;
+    proseSync.value = 'syncing';
+    try {
+      await ingestProseText(projectId, activeProseDocId.value, text);
+      activeProseText.value = text;
+      proseSync.value = 'saved';
+    } catch (e: any) {
+      error.value = e?.response?.data?.error ?? e?.message ?? '正文保存失败';
+      proseSync.value = 'error';
+      throw e;
+    }
+  }
+
   function clear() {
     chapters.value = [];
     selectedId.value = null;
     error.value = '';
+    activeProseText.value = '';
+    activeProseDocId.value = null;
+    proseSync.value = 'saved';
   }
 
   return {
     chapters, selectedId, loading, error, acting,
-    selected, loadChapters, select, create, rename, transition, reorder, clear,
+    activeProseText, activeProseDocId, proseSync,
+    selected, loadChapters, select, create, rename, transition, reorder,
+    getOrCreateProse, saveProse, clear,
   };
 });

@@ -70,6 +70,7 @@ export class ChapterService {
       order: number; title: string; goals: string[];
       povEntityId: string; linkedSceneIds: string[];
       linkedThreadIds: string[]; linkedDraftIds: string[];
+      proseDocumentId: string;
     }>,
   ): ChapterPlan {
     const chapter = this.store.getChapterPlan(id);

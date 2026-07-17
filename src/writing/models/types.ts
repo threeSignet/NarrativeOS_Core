@@ -806,6 +806,8 @@ export interface ChapterPlan {
   linkedThreadIds: string[];
   /** 关联的草案 ID 列表（一个章节可有多个草案版本） */
   linkedDraftIds: string[];
+  /** 关联的正文文档 ID（一章一正文，迭代 A2 引入；点章节打开此文档的正文编辑器） */
+  proseDocumentId?: string;
   status: ChapterPlanStatus;
   version: number;
   createdAt: string;

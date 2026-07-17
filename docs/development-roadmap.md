@@ -27,8 +27,8 @@
 | 迭代 | 主题 | 涉及 service | 完成标准 | 状态 |
 |---|---|---|---|---|
 | **A1** | ChapterService 接前端：章节列表 + CRUD | chapter | 章节活动栏 + 侧栏章节列表 + 新建/改名/排序/状态推进；vue-tsc 0 + Playwright 验证 | ✅ 完成 |
-| A2 | ProseService 接前端：章节正文编辑 | prose | 章节下挂正文块；复用 TipTap 编辑器；自动保存 | 待开始 |
-| A3 | 章节正文联动：点章节 → 打开正文 | chapter + prose | 章节树点章节 → 主区打开该章正文编辑器 | 待开始 |
+| A2 | ProseService 接前端：章节正文编辑 | prose | 章节下挂正文块；复用 TipTap 编辑器；自动保存 | ✅ 完成 |
+| A3 | 章节正文联动：点章节 → 打开正文 | chapter + prose | 章节树点章节 → 主区打开该章正文编辑器 | ✅ 被 A2 吸收 |
 | A4 | DraftService 轻接：章节草案 | draft | 章节可关联草案；草案基本 CRUD（不含 Agent 共写） | 待开始 |
 
 ### 阶段 B · 创意源头（灵感与蓝本）
@@ -83,6 +83,22 @@
 **发现并修复的 bug**：v-for 内 `ref="renameInput"` 收集成数组导致 `.focus is not a function`，改用函数 ref `:ref="setRenameInput"`
 
 **下一步**：A2（ProseService 接前端，章节下挂正文块，复用 TipTap 编辑器）
+
+### 迭代 A2 · 章节正文编辑器 ✅（2026-07-17）
+
+**做了什么**：
+- 后端 schema：ChapterPlan 加 `proseDocumentId` 字段（model + DDL + store CRUD + 已有库 ALTER TABLE 迁移）
+- BFF：新建 `apps/bff/src/routes/prose.ts`（4 端点：GET 列表/单个 + POST 创建 + POST ingest 文本写入），server.ts 注册。chapters PATCH 支持 proseDocumentId
+- 前端：`api/prose.ts`（ProseDocument/ProseBlock 类型 + blocksToMarkdown 转换）+ chapter store 扩展（activeProseText/proseSync + getOrCreateProse/saveProse action）
+- 编辑器：`ChapterProseEditor.vue`（TipTap + StarterKit，复用 EditorToolbar，防抖1s自动保存，Markdown↔块转换）
+- manifest：chapter-planner 加 mainView（模块独占主区，点章节打开正文）
+
+**核心联动**：一章 = 一个 ProseDocument。点章节侧栏 → 若无正文自动创建并回填 proseDocumentId → 加载块转 Markdown → 编辑器渲染 → 编辑防抖保存 → 后端 ingestText 全量替换块
+
+**验证**：vue-tsc 0 错；Playwright 8/8（无选中提示/选中后编辑器可编辑/输入自动保存状态栏已保存/刷新后内容持久化）
+
+**下一步**：A3 已被 A2 吸收（点章节打开正文已实现）。下一迭代 B1（IdeaService 灵感卡片）或补章节的 goals/POV 编辑 UI
+
 
 
 ---

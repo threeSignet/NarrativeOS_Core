@@ -88,6 +88,7 @@ export function registerChapterRoutes(app: FastifyInstance, deps: ChapterRouteDe
       goals?: string[];
       povEntityId?: string;
       order?: number;
+      proseDocumentId?: string;
     };
     if (typeof body?.expectedVersion !== 'number') {
       reply.code(400); return { error: '缺少 expectedVersion', code: WritingErrorCode.WRITING_STORE_ERROR };
@@ -98,6 +99,7 @@ export function registerChapterRoutes(app: FastifyInstance, deps: ChapterRouteDe
       if (body.goals !== undefined) updates.goals = body.goals;
       if (body.povEntityId !== undefined) updates.povEntityId = body.povEntityId;
       if (body.order !== undefined) updates.order = body.order;
+      if (body.proseDocumentId !== undefined) updates.proseDocumentId = body.proseDocumentId;
       return getChapterService().updateChapter(makeCtx({ pid }), id, body.expectedVersion, updates);
     } catch (err) { return handleErr(err, reply); }
   });

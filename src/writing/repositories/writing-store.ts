@@ -506,6 +506,7 @@ CREATE TABLE IF NOT EXISTS writing_chapter_plans (
   linked_scene_ids_json  TEXT NOT NULL DEFAULT '[]',
   linked_thread_ids_json TEXT NOT NULL DEFAULT '[]',
   linked_draft_ids_json  TEXT NOT NULL DEFAULT '[]',
+  prose_document_id   TEXT,
   status              TEXT NOT NULL DEFAULT 'planned',
   version             INTEGER NOT NULL DEFAULT 1,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
@@ -2980,6 +2981,7 @@ export class SQLiteWritingStore {
     order: number; title: string; goals: string[];
     povEntityId: string; linkedSceneIds: string[];
     linkedThreadIds: string[]; linkedDraftIds: string[];
+    proseDocumentId: string;
     status: ChapterPlanStatus;
   }>): { newVersion: number } {
     const parts: string[] = []; const vals: unknown[] = [];
@@ -2990,6 +2992,7 @@ export class SQLiteWritingStore {
     if (updates.linkedSceneIds !== undefined) { parts.push('linked_scene_ids_json = ?'); vals.push(JSON.stringify(updates.linkedSceneIds)); }
     if (updates.linkedThreadIds !== undefined) { parts.push('linked_thread_ids_json = ?'); vals.push(JSON.stringify(updates.linkedThreadIds)); }
     if (updates.linkedDraftIds !== undefined) { parts.push('linked_draft_ids_json = ?'); vals.push(JSON.stringify(updates.linkedDraftIds)); }
+    if (updates.proseDocumentId !== undefined) { parts.push('prose_document_id = ?'); vals.push(updates.proseDocumentId); }
     if (updates.status !== undefined) {
       const current = this.db.prepare('SELECT status FROM writing_chapter_plans WHERE id = ?').get(id) as { status: string } | undefined;
       if (current) validateChapterPlanStatus(current.status, updates.status, id);
@@ -3016,6 +3019,7 @@ export class SQLiteWritingStore {
       linkedSceneIds: safeParseJson(row['linked_scene_ids_json'] as string, row['id'] as string, 'linked_scene_ids') as string[],
       linkedThreadIds: safeParseJson(row['linked_thread_ids_json'] as string, row['id'] as string, 'linked_thread_ids') as string[],
       linkedDraftIds: safeParseJson(row['linked_draft_ids_json'] as string, row['id'] as string, 'linked_draft_ids') as string[],
+      proseDocumentId: (row['prose_document_id'] as string) ?? undefined,
       status: row['status'] as ChapterPlanStatus,
       version: row['version'] as number,
       createdAt: row['created_at'] as string, updatedAt: row['updated_at'] as string,
