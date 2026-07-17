@@ -23,6 +23,7 @@ import { registerChapterRoutes } from './routes/chapters.js';
 import { registerProseRoutes } from './routes/prose.js';
 import { registerIdeaRoutes } from './routes/ideas.js';
 import { registerForeshadowingRoutes } from './routes/foreshadowings.js';
+import { registerTimelineRoutes } from './routes/timelines.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -84,6 +85,12 @@ async function main() {
   // 伏笔看板（迭代 C1）——§17 伏笔/暗示/回收，不写 Core
   registerForeshadowingRoutes(app, {
     getForeshadowingService: () => services.getActiveSession().foreshadowingService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 时间线（迭代 C2）——§15 双轨时间线只读视图，不写 Core
+  registerTimelineRoutes(app, {
+    getTimelineService: () => services.getActiveSession().timelineService,
     makeCtx: services.makeCtx,
   });
 

@@ -47,7 +47,7 @@
 | 迭代 | 主题 | 涉及 service | 完成标准 | 状态 |
 |---|---|---|---|---|
 | C1 | ForeshadowingService 接前端：伏笔看板 | foreshadowing | 伏笔列表 + 状态（铺设/推进/回收） | ✅ 完成 |
-| C2 | TimelineService 接前端：时间线视图 | timeline | 时间线只读视图（Core 事件 + 章节/场景计划） | 待开始 |
+| C2 | TimelineService 接前端：时间线视图 | timeline | 时间线只读视图（Core 事件 + 章节/场景计划） | ✅ 完成 |
 | C3 | ReaderService 接前端：读者认知模型 | reader | 读者群体 + 认知状态只读视图 | 待开始 |
 | C4 | SpatialService 接前端：空间地图 | spatial | 空间节点/边只读视图（复用图谱模式） | 待开始 |
 
@@ -142,6 +142,19 @@
 **验证**：vue-tsc 0 错；Playwright 9/9（侧栏渲染/创建归入已计划列/状态推进→铺设中/放弃→已放弃列/无异常）
 
 **下一步**：C2（TimelineService 时间线只读）或 B2（蓝图只读）
+
+### 迭代 C2 · TimelineService 接前端（时间线只读视图）✅（2026-07-17）
+
+**做了什么**：
+- BFF：`apps/bff/src/routes/timelines.ts`（1 个 GET 端点：buildTimelineView，支持 mode/sourceLayers/chapterRange 过滤），server.ts 注册
+- 前端：`api/timelines.ts`（TimelineView/ItemView 类型 + Layer 5种中文标签/颜色）+ `stores/timeline.ts`（loadTimeline/switchMode/toggleLayer + filteredItems/groupedByChapter computed）
+- 插件：`timeline-view`（时钟图标 + TimelineSideView 侧栏[模式切换 世界/叙述 + 来源层过滤芯片] + TimelineCanvas 主区[按章节分组的垂直时间轴，每章一节，条目带来源层标签]）+ manifest（order=6）
+- 数据来源：合并 Core events 表（committed）+ 章节规划（planned）+ 场景规划（planned），双轨排序（world/narrative）
+
+**验证**：vue-tsc 0 错；Playwright 10/10（侧栏渲染/模式切换/来源层过滤/13条目按10章分组/来源层标签已提交/无异常）
+
+**下一步**：C3（ReaderService 读者认知模型）或 C4（SpatialService 空间地图）
+
 
 
 
