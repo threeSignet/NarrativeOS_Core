@@ -49,7 +49,7 @@
 | C1 | ForeshadowingService 接前端：伏笔看板 | foreshadowing | 伏笔列表 + 状态（铺设/推进/回收） | ✅ 完成 |
 | C2 | TimelineService 接前端：时间线视图 | timeline | 时间线只读视图（Core 事件 + 章节/场景计划） | ✅ 完成 |
 | C3 | ReaderService 接前端：读者认知模型 | reader | 读者群体 + 认知状态只读视图 | ✅ 完成 |
-| C4 | SpatialService 接前端：空间地图 | spatial | 空间节点/边只读视图（复用图谱模式） | 待开始 |
+| C4 | SpatialService 接前端：空间地图 | spatial | 空间节点/边只读视图（复用图谱模式） | ✅ 完成 |
 
 ### 阶段 D · 高级写作（修订/Retcon/风格/场景）
 
@@ -167,6 +167,21 @@
 **验证**：vue-tsc 0 错；Playwright 9/9（侧栏渲染/创建群体/选中标题/添加认知主体可见/state切换/无异常）
 
 **下一步**：C4（SpatialService 空间地图）或 B2（蓝图只读）
+
+### 迭代 C4 · SpatialService 接前端（空间地图只读树）✅（2026-07-17）· 阶段 C 完结
+
+**做了什么**：
+- BFF：`apps/bff/src/routes/spatials.ts`（1 个 GET 端点：buildSpatialTreeView，按 contains/parent_of 边构建父子树），server.ts 注册
+- 前端：`api/spatials.ts`（SpatialNode/TreeNode/TreeView 类型）+ `stores/spatial.ts`（loadTree）
+- 插件：`spatial-map`（地图标记图标 + SpatialSideView 侧栏[节点/关系统计卡片] + SpatialTreeView 主区[递归树视图 SpatialNodeItem 自引用组件，展开/折叠]）+ manifest（order=8）
+- 范围控制：只接 SpatialViewService 的只读树视图，不碰 SpatialService 写操作（节点/边 CRUD 留后续）
+
+**验证**：vue-tsc 0 错；Playwright 5/5（侧栏渲染/统计卡片/空状态正确/BFF树结构/无异常）
+
+**★ 阶段 C 完结**：伏笔(C1) + 时间线(C2) + 读者(C3) + 空间(C4) 四大一致性能力全部接前端。前端覆盖 service 数：14/23
+
+**下一步**：B2（BlueprintService 蓝图只读）或 D1（SceneService 场景卡）
+
 
 
 

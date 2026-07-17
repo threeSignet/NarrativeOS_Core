@@ -25,6 +25,7 @@ import { registerIdeaRoutes } from './routes/ideas.js';
 import { registerForeshadowingRoutes } from './routes/foreshadowings.js';
 import { registerTimelineRoutes } from './routes/timelines.js';
 import { registerReaderRoutes } from './routes/readers.js';
+import { registerSpatialRoutes } from './routes/spatials.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -98,6 +99,12 @@ async function main() {
   // 读者认知模型（迭代 C3）——§16 读者群体 + 认知状态，不写 Core
   registerReaderRoutes(app, {
     getReaderService: () => services.getActiveSession().readerService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 空间地图（迭代 C4）——§9 地理/空间树状只读视图，不写 Core
+  registerSpatialRoutes(app, {
+    getSpatialViewService: () => services.getActiveSession().spatialViewService,
     makeCtx: services.makeCtx,
   });
 
