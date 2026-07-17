@@ -21,6 +21,7 @@ import { registerGraphRoutes } from './routes/relations.js';
 import { registerDecisionRoutes } from './routes/decisions.js';
 import { registerChapterRoutes } from './routes/chapters.js';
 import { registerProseRoutes } from './routes/prose.js';
+import { registerIdeaRoutes } from './routes/ideas.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -70,6 +71,12 @@ async function main() {
   // 正文文档（迭代 A2）——§13.8 块级正文，不写 Core
   registerProseRoutes(app, {
     getProseService: () => services.getActiveSession().proseService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 灵感卡片（迭代 B1）——§5.1 低约束收集区，不写 Core
+  registerIdeaRoutes(app, {
+    getIdeaService: () => services.getActiveSession().ideaService,
     makeCtx: services.makeCtx,
   });
 

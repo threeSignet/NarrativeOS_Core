@@ -37,7 +37,7 @@
 
 | 迭代 | 主题 | 涉及 service | 完成标准 | 状态 |
 |---|---|---|---|---|
-| B1 | IdeaService 接前端：灵感卡片池 | idea | 灵感活动栏 + 卡片列表 + 新建/编辑/丢弃/恢复 | 待开始 |
+| B1 | IdeaService 接前端：灵感卡片池 | idea | 灵感活动栏 + 卡片列表 + 新建/编辑/丢弃/恢复 | ✅ 完成 |
 | B2 | BlueprintService 接前端：世界观蓝本 | blueprint | 蓝本查看（谓词/规则集/实体模板/作用域预设）只读视图 | 待开始 |
 
 ### 阶段 C · 一致性能力（伏笔/时间线/读者/空间）
@@ -98,6 +98,19 @@
 **验证**：vue-tsc 0 错；Playwright 8/8（无选中提示/选中后编辑器可编辑/输入自动保存状态栏已保存/刷新后内容持久化）
 
 **下一步**：A3 已被 A2 吸收（点章节打开正文已实现）。下一迭代 B1（IdeaService 灵感卡片）或补章节的 goals/POV 编辑 UI
+
+### 迭代 B1 · IdeaService 接前端 ✅（2026-07-17）
+
+**做了什么**：
+- 后端：IdeaService 补 `updateIdea` 方法（编辑 content/summary/tags/kind）
+- BFF：`apps/bff/src/routes/ideas.ts`（6 端点：GET 列表/单个 + POST 捕捉 + PATCH 编辑 + POST 废弃/恢复），server.ts 注册
+- 前端：`api/ideas.ts`（IdeaCard 类型 + Kind/Maturity 中文标签/颜色映射）+ `stores/idea.ts`（load/capture/edit/discard/restore + 搜索/类型过滤 computed）
+- 插件：`idea-board`（灯泡图标 + IdeaListView 侧栏[捕捉表单/搜索/类型芯片过滤/归档开关] + IdeaDetailView 主区[content/summary/tags/kind 编辑]）+ manifest（order=4）
+
+**验证**：vue-tsc 0 错；Playwright 12/12（侧栏渲染/捕捉+列表增加/选中详情/编辑保存/类型过滤/搜索/归档/无异常）
+
+**下一步**：B2（BlueprintService 蓝图只读）或回到阶段 A 补 goals/POV 编辑
+
 
 
 

@@ -245,6 +245,27 @@ export class IdeaService {
   }
 
   /**
+   * 编辑灵感内容（content/summary/tags/kind）。
+   * 成熟度变更走 classifyIdea/discardIdea/restoreIdea 状态机入口，不在此处直接改。
+   */
+  updateIdea(
+    ctx: WritingRequestContext,
+    ideaId: string,
+    updates: { content?: string; summary?: string | null; tags?: string[]; kind?: IdeaKind },
+  ): IdeaCard {
+    const idea = this.store.getIdeaCard(ideaId);
+    if (!idea) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到灵感: ${ideaId}`, { objectType: 'idea', objectId: ideaId });
+    this.store.updateIdeaCard(ideaId, updates);
+    this.audit.record(ctx, {
+      action: 'update_idea',
+      targetType: 'idea_card',
+      targetId: ideaId,
+      detail: { fields: Object.keys(updates) },
+    });
+    return this.store.getIdeaCard(ideaId)!;
+  }
+
+  /**
    * 废弃灵感
    *
    * Agent 可调用：是（LOW_RISK_WRITE — §8.3.2，与 captureIdea/classifyIdea 同级）
