@@ -48,7 +48,7 @@
 |---|---|---|---|---|
 | C1 | ForeshadowingService 接前端：伏笔看板 | foreshadowing | 伏笔列表 + 状态（铺设/推进/回收） | ✅ 完成 |
 | C2 | TimelineService 接前端：时间线视图 | timeline | 时间线只读视图（Core 事件 + 章节/场景计划） | ✅ 完成 |
-| C3 | ReaderService 接前端：读者认知模型 | reader | 读者群体 + 认知状态只读视图 | 待开始 |
+| C3 | ReaderService 接前端：读者认知模型 | reader | 读者群体 + 认知状态只读视图 | ✅ 完成 |
 | C4 | SpatialService 接前端：空间地图 | spatial | 空间节点/边只读视图（复用图谱模式） | 待开始 |
 
 ### 阶段 D · 高级写作（修订/Retcon/风格/场景）
@@ -154,6 +154,20 @@
 **验证**：vue-tsc 0 错；Playwright 10/10（侧栏渲染/模式切换/来源层过滤/13条目按10章分组/来源层标签已提交/无异常）
 
 **下一步**：C3（ReaderService 读者认知模型）或 C4（SpatialService 空间地图）
+
+### 迭代 C3 · ReaderService 接前端（读者认知模型）✅（2026-07-17）
+
+**做了什么**：
+- BFF：`apps/bff/src/routes/readers.ts`（5 端点：GET 群体 + POST 创建 + GET 认知 + POST 添加 + PATCH 更新），server.ts 注册
+- 前端：`api/readers.ts`（Audience/KnowledgeState 类型 + Kind 4种/State 7态中文标签+颜色）+ `stores/reader.ts`（loadAudiences/loadKnowledge/create/addKnowledge/editKnowledge）
+- 插件：`reader-model`（眼睛图标 + ReaderSideView 侧栏[群体列表/新建] + ReaderKnowledgeView 主区[认知状态列表 + 添加 + state 下拉切换]）+ manifest（order=7）
+
+**发现并修复的 bug**：`writing_reader_audiences` / `writing_reader_knowledge_states` 两表缺 row mapper，直接 `as` 强转导致 camelCase 字段（projectId/subjectRef 等）丢失返回 undefined。补 `rowToReaderAudience` / `rowToReaderKnowledgeState` mapper（narrativePositionType/Id 组合为 narrativePositionRef）
+
+**验证**：vue-tsc 0 错；Playwright 9/9（侧栏渲染/创建群体/选中标题/添加认知主体可见/state切换/无异常）
+
+**下一步**：C4（SpatialService 空间地图）或 B2（蓝图只读）
+
 
 
 

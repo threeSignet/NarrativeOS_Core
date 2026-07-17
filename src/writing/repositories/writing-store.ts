@@ -3133,11 +3133,23 @@ export class SQLiteWritingStore {
     this.db.prepare(
       `INSERT INTO writing_reader_audiences (id, project_id, label, kind, notes) VALUES (?, ?, ?, ?, ?)`
     ).run(id, projectId, input.label, input.kind, input.notes ?? null);
-    return this.db.prepare('SELECT * FROM writing_reader_audiences WHERE id = ?').get(id) as ReaderAudienceProfile;
+    return this.rowToReaderAudience(this.db.prepare('SELECT * FROM writing_reader_audiences WHERE id = ?').get(id) as Record<string, unknown>);
   }
 
   listReaderAudiences(projectId: string): ReaderAudienceProfile[] {
-    return this.db.prepare('SELECT * FROM writing_reader_audiences WHERE project_id = ?').all(projectId) as ReaderAudienceProfile[];
+    return (this.db.prepare('SELECT * FROM writing_reader_audiences WHERE project_id = ?').all(projectId) as Record<string, unknown>[]).map(r => this.rowToReaderAudience(r));
+  }
+
+  /** DB snake_case 行 → camelCase ReaderAudienceProfile（修复 projectId 等字段丢失 bug） */
+  private rowToReaderAudience(row: Record<string, unknown>): ReaderAudienceProfile {
+    return {
+      id: row['id'] as string,
+      projectId: row['project_id'] as string,
+      label: row['label'] as string,
+      kind: row['kind'] as ReaderAudienceKind,
+      enabled: Boolean(row['enabled']),
+      notes: (row['notes'] as string) ?? undefined,
+    };
   }
 
   // ===========================================================================
@@ -3154,11 +3166,29 @@ export class SQLiteWritingStore {
     this.db.prepare(
       `INSERT INTO writing_reader_knowledge_states (id, audience_id, narrative_position_type, narrative_position_id, subject_ref, state, confidence, source_refs_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(id, input.audienceId, input.narrativePositionType, input.narrativePositionId, input.subjectRef, input.state, input.confidence ?? 0.5, JSON.stringify(input.sourceRefs ?? []));
-    return this.db.prepare('SELECT * FROM writing_reader_knowledge_states WHERE id = ?').get(id) as ReaderKnowledgeState;
+    return this.rowToReaderKnowledgeState(this.db.prepare('SELECT * FROM writing_reader_knowledge_states WHERE id = ?').get(id) as Record<string, unknown>);
   }
 
   listReaderKnowledgeStates(audienceId: string): ReaderKnowledgeState[] {
-    return this.db.prepare('SELECT * FROM writing_reader_knowledge_states WHERE audience_id = ?').all(audienceId) as ReaderKnowledgeState[];
+    return (this.db.prepare('SELECT * FROM writing_reader_knowledge_states WHERE audience_id = ?').all(audienceId) as Record<string, unknown>[]).map(r => this.rowToReaderKnowledgeState(r));
+  }
+
+  /** DB snake_case 行 → camelCase ReaderKnowledgeState（修复 subjectRef 等字段丢失 bug） */
+  private rowToReaderKnowledgeState(row: Record<string, unknown>): ReaderKnowledgeState {
+    return {
+      id: row['id'] as string,
+      audienceId: row['audience_id'] as string,
+      narrativePositionRef: {
+        objectType: (row['narrative_position_type'] as string) as WritingObjectRef['objectType'],
+        objectId: row['narrative_position_id'] as string,
+      },
+      subjectRef: row['subject_ref'] as string,
+      state: row['state'] as ReaderKnowledgeStateValue,
+      confidence: row['confidence'] as number,
+      sourceRefs: safeParseJson(row['source_refs_json'] as string, row['id'] as string, 'source_refs') as string[],
+      createdAt: row['created_at'] as string,
+      updatedAt: row['updated_at'] as string,
+    };
   }
 
   updateReaderKnowledgeState(id: string, updates: { state: ReaderKnowledgeStateValue; confidence?: number; sourceRefs?: string[] }): void {

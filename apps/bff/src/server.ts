@@ -24,6 +24,7 @@ import { registerProseRoutes } from './routes/prose.js';
 import { registerIdeaRoutes } from './routes/ideas.js';
 import { registerForeshadowingRoutes } from './routes/foreshadowings.js';
 import { registerTimelineRoutes } from './routes/timelines.js';
+import { registerReaderRoutes } from './routes/readers.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -91,6 +92,12 @@ async function main() {
   // 时间线（迭代 C2）——§15 双轨时间线只读视图，不写 Core
   registerTimelineRoutes(app, {
     getTimelineService: () => services.getActiveSession().timelineService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 读者认知模型（迭代 C3）——§16 读者群体 + 认知状态，不写 Core
+  registerReaderRoutes(app, {
+    getReaderService: () => services.getActiveSession().readerService,
     makeCtx: services.makeCtx,
   });
 
