@@ -46,7 +46,7 @@
 
 | 迭代 | 主题 | 涉及 service | 完成标准 | 状态 |
 |---|---|---|---|---|
-| C1 | ForeshadowingService 接前端：伏笔看板 | foreshadowing | 伏笔列表 + 状态（铺设/推进/回收） | 待开始 |
+| C1 | ForeshadowingService 接前端：伏笔看板 | foreshadowing | 伏笔列表 + 状态（铺设/推进/回收） | ✅ 完成 |
 | C2 | TimelineService 接前端：时间线视图 | timeline | 时间线只读视图（Core 事件 + 章节/场景计划） | 待开始 |
 | C3 | ReaderService 接前端：读者认知模型 | reader | 读者群体 + 认知状态只读视图 | 待开始 |
 | C4 | SpatialService 接前端：空间地图 | spatial | 空间节点/边只读视图（复用图谱模式） | 待开始 |
@@ -128,6 +128,21 @@
 **验证**：vue-tsc 0 错；Playwright 12/12（信息条渲染/goals 增删/POV 下拉含3实体/折叠展开/无异常）
 
 **下一步**：C1（伏笔看板）或 B2（蓝图只读）
+
+### 迭代 C1 · ForeshadowingService 接前端（伏笔看板）✅（2026-07-17）
+
+**做了什么**：
+- BFF：`apps/bff/src/routes/foreshadowings.ts`（3 端点：GET 列表 + POST 创建 + POST 状态推进），server.ts 注册
+- 前端：`api/foreshadowings.ts`（ForeshadowingPlan 类型 + Kind 6种/Status 6态中文标签+颜色 + STATUS_FLOW）+ `stores/foreshadowing.ts`（load/create/transition + groupedByStatus 看板分列 computed）
+- 插件：`foreshadowing-board`（旗帜图标 + ForeshadowingListView 看板式按状态分列：已计划/铺设中/回收计划/已回收/已放弃，每列显示伏笔卡 + 推进/放弃按钮）
+- manifest（order=5），仅侧栏（伏笔是规划对象，无主区编辑）
+
+**范围控制**：只接 ForeshadowingPlan 看板，不碰 HintOccurrence/PayoffPlan/RevealPlan 子模型（后续迭代）
+
+**验证**：vue-tsc 0 错；Playwright 9/9（侧栏渲染/创建归入已计划列/状态推进→铺设中/放弃→已放弃列/无异常）
+
+**下一步**：C2（TimelineService 时间线只读）或 B2（蓝图只读）
+
 
 
 

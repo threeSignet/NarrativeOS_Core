@@ -14,6 +14,7 @@ import { documentEditorManifest } from '../plugins/document-editor/manifest';
 import { entityGraphManifest } from '../plugins/entity-graph/manifest';
 import { chapterPlannerManifest } from '../plugins/chapter-planner/manifest';
 import { ideaBoardManifest } from '../plugins/idea-board/manifest';
+import { foreshadowingManifest } from '../plugins/foreshadowing-board/manifest';
 import { agentPanelManifest } from '../plugins/agent-panel/manifest';
 
 /** 全部内置插件（顺序即活动栏默认顺序；panelView 类插件不进活动栏，放末尾） */
@@ -23,6 +24,7 @@ const PLUGINS: PluginManifest[] = [
   entityGraphManifest,
   chapterPlannerManifest,
   ideaBoardManifest,
+  foreshadowingManifest,
   agentPanelManifest,
 ];
 

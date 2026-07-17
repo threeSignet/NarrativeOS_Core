@@ -22,6 +22,7 @@ import { registerDecisionRoutes } from './routes/decisions.js';
 import { registerChapterRoutes } from './routes/chapters.js';
 import { registerProseRoutes } from './routes/prose.js';
 import { registerIdeaRoutes } from './routes/ideas.js';
+import { registerForeshadowingRoutes } from './routes/foreshadowings.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -77,6 +78,12 @@ async function main() {
   // 灵感卡片（迭代 B1）——§5.1 低约束收集区，不写 Core
   registerIdeaRoutes(app, {
     getIdeaService: () => services.getActiveSession().ideaService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 伏笔看板（迭代 C1）——§17 伏笔/暗示/回收，不写 Core
+  registerForeshadowingRoutes(app, {
+    getForeshadowingService: () => services.getActiveSession().foreshadowingService,
     makeCtx: services.makeCtx,
   });
 
