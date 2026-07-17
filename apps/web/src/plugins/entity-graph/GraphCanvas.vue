@@ -6,6 +6,7 @@ import { useUiStore } from '../../stores/ui';
 import { useEntityStore } from '../../stores/entity';
 import type { GraphNode } from '../../api/types';
 import { GRAPH_LAYER_META, layerColor, layerDash, layerLabel, predicateLabel, relationTypeLabel } from '../../utils/entityKinds';
+import { UiEmpty } from '../../components';
 
 const ui = useUiStore();
 const entity = useEntityStore();
@@ -279,11 +280,13 @@ function nodeMatched(id: string): boolean {
 
 <template>
   <div ref="wrapRef" class="graph-canvas-wrap" @wheel="onWheel">
-    <div v-if="!entity.filteredGraph || entity.filteredGraph.nodes.length === 0" class="empty-state">
-      <svg class="ico" viewBox="0 0 24 24" style="width:48px;height:48px;opacity:.4"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7h8M8 7l3 9M16 7l-3 9"/></svg>
-      <div class="es-title">关系图谱为空</div>
-      <div class="es-desc">还没有实体或关系。注册实体后，这里会展示完整关系网络。</div>
-    </div>
+    <UiEmpty
+      v-if="!entity.filteredGraph || entity.filteredGraph.nodes.length === 0"
+      block
+      icon="graph-empty"
+      title="关系图谱为空"
+      description="还没有实体或关系。注册实体后，这里会展示完整关系网络。"
+    />
 
     <div
       v-else
