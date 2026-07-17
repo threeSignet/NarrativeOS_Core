@@ -6,6 +6,7 @@ import { ref, nextTick, watch } from 'vue';
 import { useAgentStore } from '../../stores/agent';
 import { useUiStore } from '../../stores/ui';
 import { renderMd } from '../../utils/miniMd';
+import { UiSideHead, UiButton, UiIcon, UiEmpty, UiTextArea } from '../../components';
 
 const agent = useAgentStore();
 const ui = useUiStore();
@@ -54,23 +55,23 @@ function onClear() {
 
 <template>
   <div class="agent-panel">
-    <!-- 顶部标题栏（复用 side-head 语义） -->
-    <div class="side-head">
-      <span class="side-title">AI 助手</span>
-      <div class="side-actions">
-        <button class="icon-btn" title="清空对话" :disabled="agent.streaming" @click="onClear">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-        </button>
-      </div>
-    </div>
+    <!-- 顶部标题栏（复用 UiSideHead） -->
+    <UiSideHead title="AI 助手">
+      <template #actions>
+        <UiButton icon variant="ghost" size="sm" title="清空对话" :disabled="agent.streaming" @click="onClear">
+          <UiIcon name="trash" :size="15" />
+        </UiButton>
+      </template>
+    </UiSideHead>
 
     <!-- 消息列表 -->
     <div ref="bodyRef" class="agent-body">
-      <div v-if="agent.messages.length === 0" class="empty-state" style="height:auto;padding:var(--sp-6) var(--sp-3);">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-        <div class="es-title">和 AI 助手对话</div>
-        <div class="es-desc">问我关于设定、角色关系，<br/>或让我帮你梳理故事。</div>
-      </div>
+      <UiEmpty
+        v-if="agent.messages.length === 0"
+        icon="chat"
+        title="和 AI 助手对话"
+        description="问我关于设定、角色关系，或让我帮你梳理故事。"
+      />
 
       <div
         v-for="msg in agent.messages"
@@ -94,18 +95,19 @@ function onClear() {
 
     <!-- 输入区 -->
     <div class="agent-input">
-      <textarea
+      <UiTextArea
         v-model="input"
         class="agent-textarea"
         placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
-        rows="3"
+        :rows="3"
+        :no-resize="true"
         :disabled="agent.streaming"
         @keydown="onKeydown"
       />
       <div class="agent-input-actions">
         <span v-if="agent.streaming" class="agent-status">生成中…</span>
-        <button v-if="agent.streaming" class="btn btn--sm" @click="onStop">停止</button>
-        <button v-else class="btn btn--sm btn--primary" :disabled="!input.trim() || !ui.projectId" @click="onSend">发送</button>
+        <UiButton v-if="agent.streaming" size="sm" @click="onStop">停止</UiButton>
+        <UiButton v-else variant="primary" size="sm" :disabled="!input.trim() || !ui.projectId" @click="onSend">发送</UiButton>
       </div>
     </div>
   </div>
@@ -208,25 +210,10 @@ function onClear() {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* 输入框微调：比 UiTextArea 默认略大 padding + 行距，聊天场景更舒适 */
 .agent-textarea {
-  width: 100%;
-  resize: none;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 8px 10px;
-  font-size: var(--fs-sm);
-  color: var(--text);
-  font-family: inherit;
+  padding: 8px 10px !important;
   line-height: 1.5;
-}
-.agent-textarea:focus {
-  outline: none;
-  border-color: var(--border-focus);
-}
-.agent-textarea:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 .agent-input-actions {
   display: flex;

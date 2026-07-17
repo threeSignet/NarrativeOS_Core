@@ -16,6 +16,8 @@ withDefaults(defineProps<{
 
 defineEmits<{
   (e: 'update:modelValue', value: string): void;
+  /** 原生 keydown 透传（聊天框 Enter 发送等场景需要） */
+  (e: 'keydown', ev: KeyboardEvent): void;
 }>();
 </script>
 
@@ -28,6 +30,7 @@ defineEmits<{
     :disabled="disabled"
     :rows="rows"
     @input="$emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
+    @keydown="$emit('keydown', $event)"
   />
 </template>
 
