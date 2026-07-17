@@ -14,8 +14,8 @@
 import { onMounted, onBeforeUnmount, ref, computed } from 'vue';
 
 export interface ContextMenuItem {
-  /** 显示文字 */
-  label: string;
+  /** 显示文字（separator 项可省略） */
+  label?: string;
   /** 危险项（红色，如"归档"） */
   danger?: boolean;
   /** 禁用 */

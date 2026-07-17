@@ -4,6 +4,7 @@ import { ref, computed, watch } from 'vue';
 import { useUiStore } from '../../stores/ui';
 import { useDocumentStore } from '../../stores/document';
 import { useToast } from '../../composables/useToast';
+import { UiSideHead, UiButton, UiIcon, UiSearchBar, UiSideBody, UiEmpty } from '../../components';
 import DocumentTreeNode from './DocumentTreeNode.vue';
 import CreateInputRow from './CreateInputRow.vue';
 
@@ -92,20 +93,19 @@ const isRootPending = computed(() => docs.pendingCreate?.parentId === null);
 </script>
 
 <template>
-  <div class="side-head">
-    <span class="side-title">文档</span>
-    <div class="side-actions">
-      <button class="icon-btn" title="导入文件（txt/md）" @click="triggerImport">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      </button>
-      <button class="icon-btn" title="新建文件夹" @click="newFolder">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 11v4M10 13h4"/></svg>
-      </button>
-      <button class="icon-btn" title="新建文档" @click="newDocument">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M12 12v4M10 14h4"/></svg>
-      </button>
-    </div>
-  </div>
+  <UiSideHead title="文档">
+    <template #actions>
+      <UiButton icon variant="ghost" size="sm" title="导入文件（txt/md）" @click="triggerImport">
+        <UiIcon name="import" :size="15" />
+      </UiButton>
+      <UiButton icon variant="ghost" size="sm" title="新建文件夹" @click="newFolder">
+        <UiIcon name="folder-plus" :size="15" />
+      </UiButton>
+      <UiButton icon variant="ghost" size="sm" title="新建文档" @click="newDocument">
+        <UiIcon name="file-plus" :size="15" />
+      </UiButton>
+    </template>
+  </UiSideHead>
 
   <input
     ref="importInput"
@@ -116,12 +116,9 @@ const isRootPending = computed(() => docs.pendingCreate?.parentId === null);
     @change="onImportChosen"
   />
 
-  <div class="side-search">
-    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-    <input v-model="search" placeholder="搜索文档…" />
-  </div>
+  <UiSearchBar v-model="search" placeholder="搜索文档…" />
 
-  <div class="side-body">
+  <UiSideBody>
     <!-- 根级占位创建行 -->
     <CreateInputRow
       v-if="isRootPending"
@@ -137,12 +134,14 @@ const isRootPending = computed(() => docs.pendingCreate?.parentId === null);
       :depth="0"
       :expanded-set="effectiveExpanded"
     />
-    <div v-if="filteredTree.length === 0 && !isRootPending" class="empty-state" style="height: auto; padding: var(--sp-6) var(--sp-3);">
-      <div class="es-desc">{{ search ? '无匹配文档' : '点击右上 + 新建第一个文档' }}</div>
-    </div>
-  </div>
+    <UiEmpty
+      v-if="filteredTree.length === 0 && !isRootPending"
+      :description="search ? '无匹配文档' : '点击右上 + 新建第一个文档'"
+    />
+  </UiSideBody>
 </template>
 
 <style scoped>
+/* 隐藏的文件选择 input（触发文件导入对话框） */
 .hidden-import { display: none; }
 </style>

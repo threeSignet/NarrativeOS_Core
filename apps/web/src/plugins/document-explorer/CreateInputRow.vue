@@ -4,6 +4,7 @@
 import { ref, onMounted, nextTick } from 'vue';
 import { useUiStore } from '../../stores/ui';
 import { useDocumentStore } from '../../stores/document';
+import { UiIcon } from '../../components';
 
 const props = defineProps<{
   /** 缩进深度 */
@@ -50,12 +51,7 @@ function onBlur() {
 <template>
   <div class="create-row" :style="{ paddingLeft: depth * 14 + 'px' }">
     <span class="twisty placeholder"></span>
-    <svg v-if="kind === 'folder'" class="node-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-    </svg>
-    <svg v-else class="node-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" />
-    </svg>
+    <UiIcon class="node-ico" :name="kind === 'folder' ? 'folder' : 'file'" :size="16" :stroke-width="1.6" />
     <input
       ref="inputEl"
       v-model="value"
@@ -76,7 +72,7 @@ function onBlur() {
 }
 .twisty { width: 16px; height: 16px; flex-shrink: 0; }
 .twisty.placeholder { width: 16px; }
-.node-ico { width: 16px; height: 16px; color: var(--text-2); flex-shrink: 0; }
+.node-ico { color: var(--text-2); flex-shrink: 0; }
 .create-input {
   flex: 1; min-width: 0;
   background: var(--bg-input);

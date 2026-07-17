@@ -6,6 +6,8 @@ import { useDocumentStore } from '../../stores/document';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import type { DocumentNode } from '../../shell/types';
+import type { ContextMenuItem } from '../../components';
+import { UiIcon, UiContextMenu } from '../../components';
 import CreateInputRow from './CreateInputRow.vue';
 
 const props = defineProps<{
@@ -78,34 +80,33 @@ function onContextMenu(e: MouseEvent) {
   menuX.value = e.clientX;
   menuY.value = e.clientY;
   showMenu.value = true;
-  document.addEventListener('click', closeMenu, { once: true });
 }
 function closeMenu() { showMenu.value = false; }
 
 // VS Code 行为：在文件夹上右键新建 → 在该文件夹【内部】创建；
 // 在文档上右键新建 → 在该文档【同级】（即其父下）创建。
-function menuNewFolder() {
-  closeMenu();
-  const inFolder = isFolder.value;
-  const parentId = inFolder ? props.node.id : props.node.parentId;
-  const childDepth = inFolder ? props.depth + 1 : props.depth;
-  if (inFolder) docs.select(props.node.id); // 选中文件夹，占位渲染在其内部
-  docs.startCreate(parentId, 'folder', childDepth);
-}
-
-function menuNewDocument() {
-  closeMenu();
-  const inFolder = isFolder.value;
-  const parentId = inFolder ? props.node.id : props.node.parentId;
-  const childDepth = inFolder ? props.depth + 1 : props.depth;
-  if (inFolder) docs.select(props.node.id);
-  docs.startCreate(parentId, 'document', childDepth);
-}
-
-function menuRename() { closeMenu(); startRename(); }
+// 菜单项构造：UiContextMenu 点击 item 后自动 emit close，故此处无需手动 closeMenu。
+const menuItems = computed<ContextMenuItem[]>(() => [
+  { label: '新建文件夹', onClick: () => {
+    const inFolder = isFolder.value;
+    const parentId = inFolder ? props.node.id : props.node.parentId;
+    const childDepth = inFolder ? props.depth + 1 : props.depth;
+    if (inFolder) docs.select(props.node.id);
+    docs.startCreate(parentId, 'folder', childDepth);
+  }},
+  { label: '新建文档', onClick: () => {
+    const inFolder = isFolder.value;
+    const parentId = inFolder ? props.node.id : props.node.parentId;
+    const childDepth = inFolder ? props.depth + 1 : props.depth;
+    if (inFolder) docs.select(props.node.id);
+    docs.startCreate(parentId, 'document', childDepth);
+  }},
+  { separator: true },
+  { label: '重命名', onClick: () => startRename() },
+  { label: '归档', danger: true, onClick: () => menuArchive() },
+]);
 
 async function menuArchive() {
-  closeMenu();
   const ok = await confirm({
     title: `归档「${props.node.title}」？`,
     message: isFolder.value ? '文件夹内全部内容将一并归档。' : '归档后可在数据库中恢复，但界面不再显示。',
@@ -234,18 +235,16 @@ function onDblClick() { startRename(); }
       @drop="onDrop"
     >
       <span class="twisty" v-if="isFolder" @click.stop="docs.toggleExpand(node.id)">
-        <svg v-if="isExpanded" class="ico" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
-        <svg v-else class="ico" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 6 6 6-6 6"/></svg>
+        <UiIcon :name="isExpanded ? 'chevron-down' : 'chevron-right'" :size="12" />
       </span>
       <span class="twisty placeholder" v-else></span>
 
-      <svg v-if="isFolder" class="node-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path v-if="isExpanded" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z M3 11h18" />
-        <path v-else d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-      </svg>
-      <svg v-else class="node-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" />
-      </svg>
+      <UiIcon
+        class="node-ico"
+        :name="isFolder ? (isExpanded ? 'folder-open' : 'folder') : 'file'"
+        :size="16"
+        :stroke-width="1.6"
+      />
 
       <span class="node-title truncate" v-if="!isRenaming">{{ node.title }}</span>
       <input
@@ -280,14 +279,14 @@ function onDblClick() { startRename(); }
       />
     </template>
 
-    <!-- 右键菜单 -->
-    <div v-if="showMenu" class="ctx-menu" :style="{ left: menuX + 'px', top: menuY + 'px' }" @click.stop>
-      <button class="ctx-item" @click="menuNewFolder">新建文件夹</button>
-      <button class="ctx-item" @click="menuNewDocument">新建文档</button>
-      <div class="ctx-sep"></div>
-      <button class="ctx-item" @click="menuRename">重命名</button>
-      <button class="ctx-item ctx-danger" @click="menuArchive">归档</button>
-    </div>
+    <!-- 右键菜单（UiContextMenu 自管关闭：点击项/外部/Esc 自动 emit close） -->
+    <UiContextMenu
+      v-if="showMenu"
+      :x="menuX"
+      :y="menuY"
+      :items="menuItems"
+      @close="closeMenu"
+    />
   </div>
 </template>
 
@@ -316,7 +315,8 @@ function onDblClick() { startRename(); }
   color: var(--text-3); flex-shrink: 0;
 }
 .twisty.placeholder { width: 16px; }
-.node-ico { width: 16px; height: 16px; color: var(--text-2); flex-shrink: 0; }
+/* 节点图标：尺寸由 UiIcon size prop 控制，这里只管颜色 + 不收缩 */
+.node-ico { color: var(--text-2); flex-shrink: 0; }
 .node-title { flex: 1; font-size: var(--fs-13); color: var(--text); min-width: 0; }
 .tree-node.is-folder .node-title { font-weight: 500; }
 .node-meta { font-size: 10px; flex-shrink: 0; }
@@ -330,23 +330,4 @@ function onDblClick() { startRename(); }
   font-family: var(--font-ui);
 }
 .rename-input:focus { outline: none; border-color: var(--accent); }
-
-.ctx-menu {
-  position: fixed; z-index: 100;
-  min-width: 160px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-pop);
-  padding: 4px 0;
-}
-.ctx-item {
-  display: block; width: 100%; text-align: left;
-  padding: 6px 12px;
-  font-size: var(--fs-sm); color: var(--text);
-}
-.ctx-item:hover { background: var(--bg-3); }
-.ctx-danger { color: var(--danger); }
-.ctx-danger:hover { background: var(--danger-bg); }
-.ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
 </style>

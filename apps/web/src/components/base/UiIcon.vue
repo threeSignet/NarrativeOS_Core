@@ -15,8 +15,11 @@ const props = withDefaults(defineProps<{
   name: string;
   /** 尺寸 px，默认 18（对齐全局 .ico） */
   size?: number;
+  /** 描边宽度，默认 1.8（对齐全局 .ico）；树节点等精致场景可用 1.6 */
+  strokeWidth?: number;
 }>(), {
   size: 18,
+  strokeWidth: 1.8,
 });
 
 /** 图标 path 字典：name → SVG inner HTML（path/circle/line 等子元素）。
@@ -83,7 +86,7 @@ if (import.meta.env.DEV) {
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    :stroke-width="hit ? 1.8 : 1.8"
+    :stroke-width="strokeWidth"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
