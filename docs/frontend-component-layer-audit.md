@@ -149,14 +149,40 @@
 
 > **发现并修复的遗留问题**:验证写流程时暴露 `灰域行者/project.db` 的 `writing_entity_sketches` 等 22 张表缺 `version` 列(W3 乐观锁加列时 CREATE TABLE IF NOT EXISTS 不更新已存在的表)。这是**预先存在的 schema 迁移机制缺陷**,非本次前端基建引入(本次 7 个提交零后端改动)。已对开发库执行 ALTER TABLE 补列,写流程随即跑通。根因(无正式迁移机制)记入技术债。
 
-### 累计:三轮 54/54 全部通过
+### 第四轮:深度功能验证(40/40 通过,4 个脚本)
+
+前几轮验证的是"元素存在 + 基础可交互"。第四轮针对计划各节点完成标准里的**功能生效**做深度验证(操作→断言实际效果):
+
+**verify-agent-flow.mjs(9/9)**:发消息→用户消息记录内容→进入流式态→**收到真实 DeepSeek 流式回复(197字)**→光标消失正常结束→SSE 端点被调用→清空对话后消息归零+显示空状态
+
+**verify-doc-flow.mjs(9/9)**:新建文档→触发就地输入框→提交后节点增加→**自动打开编辑器标签**→双击触发重命名→提交后**旧名消失新名出现**→拖拽移动→导入 txt(7→8 节点增加)
+
+**verify-editor-format.mjs(13/13)**:每种格式验证**实际 DOM 标签生成**:加粗→`<strong>`、H1→`<h1>`、无序列表→`<ul>`、有序列表→`<ol>`、引用→`<blockquote>`、分隔线→`<hr>`、撤销→hr 减少、重做→hr 恢复、复制→toast 反馈、导出→**下载事件+文件名**、自动保存→状态栏"已保存"
+
+**verify-fresh-relation.mjs(7/7,修复后)**:新建关系→success+candidateId+pvId→生成决策→**PV 有 coreProposalId**→确认→**success+coreEventId**→决策被 resolve→**图谱出现 committed 边**
+
+### 第四轮发现的 bug + 修复
+
+**bug:confirm_proposal 决策匹配错误**(预先存在,`71ed3a7` 引入,非本次基建引入,但运行时验证暴露)
+
+- **现象**:确认关系后决策不 resolve,返回 `success:false`
+- **根因**:`decisions.ts` confirm_proposal 分支用 `candidates.find(c => c.status === 'submitted')` 找候选——当多个 submitted 候选并存时,匹配到第一个而非决策对应的那个,导致 `confirmRelationCommit` 传错 candidateId+pvId 组合,commit 失败
+- **修复**:RelationService 新增 `confirmRelationCommitByPv(ctx, pvId)`,内部从 `PV.sourceRefs[0].id` 精确取候选 id(submitRelationCandidate 已建立此关联)。decisions.ts 改调此方法,消除 decisions 层的易错匹配逻辑
+- **验证**:新建关系完整流程 7/7 通过(success=true + coreEventId + 决策 resolve + committed 边)
+- **历史数据限制**:7月11日建的遗留 PV(coreProposalId 为空,在 `a0da2d4` 修复前)无法 commit——这是数据层面的遗留,非代码 bug。新建关系不受影响
+
+### 累计:四轮运行时验证
 
 | 轮次 | 脚本 | 检查数 | 通过 | 覆盖 |
 |---|---|---|---|---|
 | 1 | verify-runtime.mjs | 32 | 32 | 基础渲染 + 契约 + 边标签中文 + 节点静止 |
 | 2 | verify-interactions.mjs | 14 | 14 | 拖拽/悬停/过滤/缩放/新建/右键菜单 |
 | 3 | verify-write-flow.mjs | 8 | 8 | 新建实体→批准→注册进 Core→图谱节点增加 |
-| **合计** | — | **54** | **54** | — |
+| 4a | verify-agent-flow.mjs | 9 | 9 | 发消息→流式回复→清空(真实 DeepSeek) |
+| 4b | verify-doc-flow.mjs | 9 | 9 | 新建文档/重命名/拖拽/导入 + 自动开编辑器 |
+| 4c | verify-editor-format.mjs | 13 | 13 | 每种格式验证 DOM 标签生成 + 撤销重做 + 导出下载 |
+| 4d | verify-fresh-relation.mjs | 7 | 7 | 新建关系→确认→committed 边(修复后) |
+| **合计** | — | **92** | **92** | — |
 
 ## 八、遗留技术债（非本次范围）
 

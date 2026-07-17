@@ -70,19 +70,25 @@ export function registerDecisionRoutes(app: FastifyInstance, deps: DecisionRoute
       }
 
       // confirm_proposal：确认关系提交 → 写进 Core
-      // decision.linkedObjectId = proposalViewId，需从 PV 找到 relationCandidateId
+      // decision.linkedObjectId = proposalViewId。
+      // 候选 id 存在 PV.sourceRefs[0].id（submitRelationCandidate 建立的关联）。
+      // 旧实现 find(status==='submitted') 会匹配到任意一个提交中的候选，
+      // 多候选并存时会找错 → confirmRelationCommit 传错参数 → commit 失败。
+      // 修复：直接从 PV.sourceRefs 取候选 id，精确关联。
       if (action === 'resolve' && decision.kind === 'confirm_proposal' && decision.linkedObjectId) {
         const pvId = decision.linkedObjectId;
-        // 从候选列表找 linkedObjectId===pvId 的候选（submit 时 PV.sourceRefs 带 candidate id）
-        const candidates = getRelationService().listRelationCandidates(ctx);
-        const candidate = candidates.find((c) => c.status === 'submitted');
-        if (!candidate) {
-          wf.resolvePendingDecision(ctx, id, { status: 'dismissed', note: '找不到对应的提交关系候选' });
-          return { success: false, error: '找不到对应的提交关系候选' };
+        // confirmRelationCommitByPv 内部从 PV.sourceRefs[0].id 取候选 id（精确关联），
+        // 避免旧实现 find(status==='submitted') 多候选时匹配错误的 bug。
+        try {
+          const result = await getRelationService().confirmRelationCommitByPv(ctx, pvId);
+          // confirmRelationCommit 内部已 resolve PendingDecision（Bug2 修复），不重复 resolve
+          return result;
+        } catch (err) {
+          const e = err as WritingError;
+          // 关联找不到时（PV 无候选/候选已废弃）dismiss 决策避免悬挂
+          wf.resolvePendingDecision(ctx, id, { status: 'dismissed', note: e?.message ?? '提交失败' });
+          return { success: false, error: e?.message ?? '提交失败' };
         }
-        const result = await getRelationService().confirmRelationCommit(ctx, candidate.id, pvId);
-        // confirmRelationCommit 内部已 resolve PendingDecision（Bug2 修复），不重复 resolve
-        return result;
       }
 
       // 其他决策或 dismiss：仅 resolve，不触发注册

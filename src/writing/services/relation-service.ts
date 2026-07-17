@@ -284,7 +284,21 @@ export class RelationService {
    * 确认关系提交——作者在 Proposal Review 确认后调用，执行真正的 commit_event。
    *
    * 从 ProposalView 取 coreProposalId → commitReviewedProposal → status → committed + 存 coreRefs。
+   *
+   * 候选 id 从 PV.sourceRefs[0].id 取（submitRelationCandidate 建立的关联），
+   * 调用方只需传 pvId,避免 decisions 层重复实现"按 pvId 找 candidate"的易错逻辑。
    */
+  async confirmRelationCommitByPv(
+    ctx: WritingRequestContext,
+    proposalViewId: string,
+  ): Promise<{ success: boolean; coreEventId?: string }> {
+    const pv = this.store.getProposalView(proposalViewId);
+    if (!pv) throw new WritingError(WritingErrorCode.WRITING_OBJECT_NOT_FOUND, `找不到审核视图: ${proposalViewId}`);
+    const candidateId = pv.sourceRefs?.[0]?.id;
+    if (!candidateId) throw new WritingError(WritingErrorCode.WRITING_STORE_ERROR, `PV ${proposalViewId} 无关联的候选 id`);
+    return this.confirmRelationCommit(ctx, candidateId, proposalViewId);
+  }
+
   async confirmRelationCommit(
     ctx: WritingRequestContext,
     relationCandidateId: string,
