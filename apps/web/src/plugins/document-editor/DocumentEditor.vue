@@ -22,6 +22,7 @@ import { useLocalDraftsStore } from '../../stores/localDrafts';
 import { useConfirm } from '../../composables/useConfirm';
 import { useToast } from '../../composables/useToast';
 import { syncEngine } from '../../services/sync-engine';
+import { UiButton, UiIcon } from '../../components';
 import EditorToolbar from './EditorToolbar.vue';
 import type { DocumentNode } from '../../shell/types';
 import {
@@ -222,15 +223,15 @@ function focusEditor() {
     <!-- 格式工具栏（右侧插槽放导入/导出/复制） -->
     <EditorToolbar :editor="editor">
       <template #actions>
-        <button class="doc-action-btn" title="导入文本（覆盖当前文档）" @click="triggerImport">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </button>
-        <button class="doc-action-btn" title="导出为 Markdown" @click="exportMarkdown">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        </button>
-        <button class="doc-action-btn" title="复制纯文本" @click="copyPlainText">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        </button>
+        <UiButton icon variant="ghost" title="导入文本（覆盖当前文档）" @click="triggerImport">
+          <UiIcon name="import" :size="16" />
+        </UiButton>
+        <UiButton icon variant="ghost" title="导出为 Markdown" @click="exportMarkdown">
+          <UiIcon name="export" :size="16" />
+        </UiButton>
+        <UiButton icon variant="ghost" title="复制纯文本" @click="copyPlainText">
+          <UiIcon name="copy" :size="16" />
+        </UiButton>
       </template>
     </EditorToolbar>
 
@@ -256,17 +257,6 @@ function focusEditor() {
   background: var(--editor-bg);
 }
 .hidden-file { display: none; }
-/* 工具栏右侧动作按钮（插槽内容由本组件渲染，故样式定义在此）。
-   尺寸与 EditorToolbar 的 .tb-btn 对齐。 */
-.doc-action-btn {
-  width: 28px; height: 28px;
-  display: inline-flex; align-items: center; justify-content: center;
-  color: var(--text-3); border-radius: var(--r-sm);
-  transition: background var(--t-fast), color var(--t-fast);
-  flex-shrink: 0;
-}
-.doc-action-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.doc-action-btn:hover { background: var(--bg-3); color: var(--text); }
 
 .doc-editor-scroll {
   flex: 1; overflow-y: auto;
