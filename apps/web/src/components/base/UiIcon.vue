@@ -92,7 +92,8 @@ if (import.meta.env.DEV) {
     aria-hidden="true"
   >
     <!-- name 命中：渲染对应 path；未命中：渲染占位方块（开发期可见，便于发现拼写错误） -->
-    <template v-if="hit" v-html="inner" />
+    <!-- 注意：SVG 内不能用 <template v-html>（SVG 命名空间下 <template> 不创建 DOM 节点） -->
+    <g v-if="hit" v-html="inner" />
     <rect v-else x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3" />
   </svg>
 </template>
