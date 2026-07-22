@@ -58,7 +58,7 @@
 | D1 | SceneService 接前端：场景卡 | scene | 场景列表 + 目标/冲突/结果 + 关联章节 | ✅ 完成 |
 | D2 | RevisionService 接前端：修订记录 | revision | 修订历史查看 + 版本组 + 恢复 | ✅ 完成 |
 | D3 | StyleService 接前端：风格指南 | style | 风格指南/示例/禁用表达只读 | ✅ 完成 |
-| D4 | RetconViewService 接前端：追溯修改 | retcon | 影响报告只读视图 | 待开始 |
+| D4 | RetconViewService 接前端：追溯修改 | retcon | 影响报告只读视图 | ✅ 完成 |
 
 ### 阶段 E · Agent 深度集成
 
@@ -220,6 +220,20 @@
 **验证**：vue-tsc 0 错；后端 vitest 929/929 全绿；Playwright 7/7（侧栏渲染/18芯片/2区块/空状态/BFF指南/BFF示例/无异常）
 
 **下一步**：D4（RetconViewService 追溯修改）或 B2（蓝图只读）
+
+### 迭代 D4 · RetconViewService 接前端（追溯修改影响报告）✅（2026-07-22）
+
+**做了什么**：
+- BFF：`apps/bff/src/routes/retcons.ts`（3 端点：GET 列表 + GET 单条 + POST 状态推进），server.ts 注册
+- 前端：`api/retcons.ts`（RetconImpactReport 类型 + Status 4态/Kind 8种/Effect 5种中文标签/颜色）+ `stores/retcon.ts`（loadReports/select/advanceStatus + statusFilter）
+- 插件：`retcon-view`（回溯箭头图标 + RetconSideView 侧栏[报告列表+状态过滤] + RetconDetailView 主区[摘要+受影响节点+受影响边+重检项+状态推进按钮]）+ manifest（order=12）
+- 验证脚本：`scripts/verify-retcon-d4.mjs`（Playwright 5 项验证）
+
+**验证**：vue-tsc 0 错；后端 vitest 929/929 全绿；Playwright 5/5（侧栏渲染/5芯片/空状态/BFF数组/无异常）
+
+**★ 阶段 D 完结**：场景(D1) + 修订(D2) + 风格(D3) + 追溯(D4) 四大高级写作能力全部接前端。前端覆盖 service 数：23/23 全覆盖。
+
+**下一步**：E1（Agent SSE 可见性）或 B2（蓝图只读，可跳过因全部 service 已覆盖）
 
 
 
