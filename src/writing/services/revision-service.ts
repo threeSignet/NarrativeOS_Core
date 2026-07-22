@@ -64,6 +64,11 @@ export class RevisionService {
     return this.store.listRevisionsByGroup(versionGroupId);
   }
 
+  /** 列出项目全部修订（D2 修订历史查看器，按时间倒序） */
+  listAllRevisions(ctx: WritingRequestContext, limit?: number): RevisionRecord[] {
+    return this.store.listAllRevisionsByProject(ctx.projectId, limit);
+  }
+
   /** 获取单条修订记录 */
   getRevision(ctx: WritingRequestContext, id: string): RevisionRecord {
     const record = this.store.getRevisionRecord(id);

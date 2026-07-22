@@ -46,6 +46,7 @@
     "@types/node": "^25.9.2",
     "concurrently": "^10.0.3",
     "dotenv": "^17.4.2",
+    "playwright-core": "^1.61.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

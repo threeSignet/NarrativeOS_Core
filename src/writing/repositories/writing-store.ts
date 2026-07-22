@@ -3759,6 +3759,17 @@ export class SQLiteWritingStore {
     return rows.map(r => this.rowToRevisionRecord(r));
   }
 
+  /** 列出项目全部修订记录（按时间倒序，D2 修订历史查看器用） */
+  listAllRevisionsByProject(projectId: string, limit?: number): RevisionRecord[] {
+    const sql = limit
+      ? 'SELECT * FROM writing_revision_records WHERE project_id = ? ORDER BY created_at DESC LIMIT ?'
+      : 'SELECT * FROM writing_revision_records WHERE project_id = ? ORDER BY created_at DESC';
+    const rows = (limit
+      ? this.db.prepare(sql).all(projectId, limit)
+      : this.db.prepare(sql).all(projectId)) as Record<string, unknown>[];
+    return rows.map(r => this.rowToRevisionRecord(r));
+  }
+
   listRevisionsByGroup(versionGroupId: string): RevisionRecord[] {
     const rows = this.db.prepare(
       'SELECT * FROM writing_revision_records WHERE version_group_id = ? ORDER BY created_at DESC',

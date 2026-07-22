@@ -19,6 +19,7 @@ import { timelineManifest } from '../plugins/timeline-view/manifest';
 import { readerModelManifest } from '../plugins/reader-model/manifest';
 import { spatialMapManifest } from '../plugins/spatial-map/manifest';
 import { sceneBoardManifest } from '../plugins/scene-board/manifest';
+import { revisionHistoryManifest } from '../plugins/revision-history/manifest';
 import { agentPanelManifest } from '../plugins/agent-panel/manifest';
 
 /** 全部内置插件（顺序即活动栏默认顺序；panelView 类插件不进活动栏，放末尾） */
@@ -33,6 +34,7 @@ const PLUGINS: PluginManifest[] = [
   readerModelManifest,
   spatialMapManifest,
   sceneBoardManifest,
+  revisionHistoryManifest,
   agentPanelManifest,
 ];
 

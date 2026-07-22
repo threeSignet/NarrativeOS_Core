@@ -27,6 +27,7 @@ import { registerTimelineRoutes } from './routes/timelines.js';
 import { registerReaderRoutes } from './routes/readers.js';
 import { registerSpatialRoutes } from './routes/spatials.js';
 import { registerSceneRoutes } from './routes/scenes.js';
+import { registerRevisionRoutes } from './routes/revisions.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -112,6 +113,12 @@ async function main() {
   // 场景卡（迭代 D1）——§14.3 场景规划，不写 Core
   registerSceneRoutes(app, {
     getSceneService: () => services.getActiveSession().sceneService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 修订历史（迭代 D2）——§19.1 通用修订记录只读查看器
+  registerRevisionRoutes(app, {
+    getRevisionService: () => services.getActiveSession().revisionService,
     makeCtx: services.makeCtx,
   });
 
