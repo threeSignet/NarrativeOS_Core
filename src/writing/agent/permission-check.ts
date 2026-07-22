@@ -122,6 +122,7 @@ export const AGENT_PERMISSIONS: Readonly<Record<string, AgentCapability>> = {
   'WorkflowService.createPendingDecision': AgentCapability.LOW_RISK_WRITE,
   // E2：正文写入（追加块，不修改/删除已有内容）
   'ProseService.addBlock': AgentCapability.LOW_RISK_WRITE,
+  'ProseService.createDocument': AgentCapability.LOW_RISK_WRITE,
   // rejectBlueprintChange 仅把 suggestion 标 dismissed，不改蓝图结构（entityTypes/relationTypes），
   // 危害性与 discardIdea 相当；与 acceptBlueprintChange（COMMIT_FORBIDDEN，落地结构变更）不对称。
   'BlueprintService.rejectBlueprintChange': AgentCapability.LOW_RISK_WRITE,
@@ -159,6 +160,9 @@ export const AGENT_PERMISSIONS: Readonly<Record<string, AgentCapability>> = {
   'BlueprintService.acceptBlueprintChange': AgentCapability.COMMIT_FORBIDDEN,
   'WorkflowService.resolvePendingDecision': AgentCapability.COMMIT_FORBIDDEN,
   'CoreBridgeService.commitReviewedProposal': AgentCapability.COMMIT_FORBIDDEN,
+  // E2：正文破坏性操作禁止 Agent 调用（全量替换/删除块只能由作者触发）
+  'ProseService.ingestText': AgentCapability.COMMIT_FORBIDDEN,
+  'ProseService.deleteBlock': AgentCapability.COMMIT_FORBIDDEN,
   'CoreBridgeService.registerReviewedEntity': AgentCapability.COMMIT_FORBIDDEN,
   // 注：spec 原表还列了 DraftService._markCommitted / EntityService._markRegistered /
   //     CoreBridgeService.commitReviewedThreadChange / commitReviewedKnowledgeChange /

@@ -106,12 +106,10 @@ export const useAgentStore = defineStore('agent', () => {
             assistantMsg.status = turn?.status;
             assistantMsg.pendingProposalIds = turn?.pendingProposalIds;
             // turn.content 是 Agent 的完整回复正文（成功）或错误信息（failed）。
-            // 流式 token 累积的是 LLM 文本，但失败时 token 为空、content 在 turn 里。
-            // 优先用 turn.content（更完整），仅当 token 已累积且 turn.content 为空时保留累积。
+            // 流式 token 累积的是 LLM 文本增量，turn.content 是最终完整版本。
+            // 用 turn.content 替换累积内容（避免重复），仅当 turn.content 为空时保留累积。
             if (turn?.content) {
-              assistantMsg.content = assistantMsg.content
-                ? assistantMsg.content + '\n\n' + turn.content
-                : turn.content;
+              assistantMsg.content = turn.content;
             }
             finishStream();
             break;
@@ -147,6 +145,11 @@ export const useAgentStore = defineStore('agent', () => {
   /** 停止当前流式生成 */
   function stop(): void {
     currentController?.close();
+    // 找到最后一条 assistant 消息，重置其 streaming 状态（消除光标）
+    const lastMsg = messages.value.at(-1);
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.streaming = false;
+    }
     streaming.value = false;
     currentController = null;
   }
