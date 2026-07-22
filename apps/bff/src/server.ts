@@ -28,6 +28,7 @@ import { registerReaderRoutes } from './routes/readers.js';
 import { registerSpatialRoutes } from './routes/spatials.js';
 import { registerSceneRoutes } from './routes/scenes.js';
 import { registerRevisionRoutes } from './routes/revisions.js';
+import { registerStyleRoutes } from './routes/styles.js';
 import { createAgentSessionManager } from './agent-session-manager.js';
 
 async function main() {
@@ -119,6 +120,12 @@ async function main() {
   // 修订历史（迭代 D2）——§19.1 通用修订记录只读查看器
   registerRevisionRoutes(app, {
     getRevisionService: () => services.getActiveSession().revisionService,
+    makeCtx: services.makeCtx,
+  });
+
+  // 风格指南（迭代 D3）——§18 风格指南/示例/禁用表达
+  registerStyleRoutes(app, {
+    getStyleService: () => services.getActiveSession().styleService,
     makeCtx: services.makeCtx,
   });
 
