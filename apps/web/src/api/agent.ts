@@ -14,6 +14,21 @@ export interface AgentTurnResult {
   pendingProposalIds?: string[];
 }
 
+export interface ToolCallEvent {
+  type: 'tool_call';
+  toolName: string;
+  callId: string;
+  args: Record<string, unknown>;
+}
+
+export interface ToolResultEvent {
+  type: 'tool_result';
+  toolName: string;
+  callId: string;
+  success: boolean;
+  summary: string;
+}
+
 export interface ChatOptions {
   projectId: string;
   input: string;

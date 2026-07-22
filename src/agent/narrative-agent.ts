@@ -364,6 +364,10 @@ export class NarrativeAgent {
     commitAuthority?: CommitAuthority;
     /** 流式输出回调：LLM 每返回一个文本 token 时实时调用 */
     onToken?: (token: string) => void;
+    /** E1: 工具调用开始回调 */
+    onToolCall?: (toolName: string, args: Record<string, unknown>, callId: string) => void;
+    /** E1: 工具调用结束回调（成功或失败） */
+    onToolResult?: (toolName: string, callId: string, success: boolean, summary: string) => void;
     /** P0-1: 当前写作章节号（传入时更新 state.currentChapter） */
     chapter?: number;
     /** P0-1: 显式指定的相关实体 ID（降级方案：用户输入中无法提取 ent_* ID 时由写作层传入） */
@@ -413,6 +417,8 @@ export class NarrativeAgent {
         systemPrompt: options?.systemPrompt,
         temperature: options?.temperature,
         onToken: options?.onToken,
+        onToolCall: options?.onToolCall,
+        onToolResult: options?.onToolResult,
         relevantEntityIds: options?.relevantEntityIds,
       });
 
@@ -621,7 +627,13 @@ export class NarrativeAgent {
     turnId: string,
     intent: UserIntent,
     userInput: string,
-    options?: { systemPrompt?: string; temperature?: number; onToken?: (token: string) => void; relevantEntityIds?: string[] },
+    options?: {
+      systemPrompt?: string; temperature?: number;
+      onToken?: (token: string) => void;
+      onToolCall?: (toolName: string, args: Record<string, unknown>, callId: string) => void;
+      onToolResult?: (toolName: string, callId: string, success: boolean, summary: string) => void;
+      relevantEntityIds?: string[];
+    },
   ): Promise<AgentTurnResult> {
     let toolStepCount = 0;
     const maxSteps = this.limits.maxToolSteps;
@@ -844,6 +856,9 @@ export class NarrativeAgent {
           detail: { arguments: tc.arguments },
         } as Omit<AgentTraceRecord, 'id' | 'createdAt'>);
 
+        // E1: 通知前端工具调用开始
+        options?.onToolCall?.(tc.name, tc.arguments as Record<string, unknown>, callId);
+
         // 执行工具
         // W1 安全门控：Agent 的 ReAct 循环禁止直接写正式世界状态（commit_event 等）。
         // 这些不可逆写入工具只能由经用户确认的通道调用（handleConfirmCommit / CoreBridge.commit*），
@@ -893,6 +908,9 @@ export class NarrativeAgent {
           // 重置该工具的失败计数
           delete this.state.toolFailureCounts[tc.name];
 
+          // E1: 通知前端工具调用成功
+          options?.onToolResult?.(tc.name, callId, true, this.truncateSummary(resultStr, 120));
+
         } else {
           // ---- Reflect：工具失败 ----
           const error = result.error;
@@ -914,6 +932,9 @@ export class NarrativeAgent {
             nextAction: reflection.nextAction,
             detail: { diagnosis: reflection.deterministicDiagnosis, correctionHint: reflection.correctionHint },
           } as Omit<AgentTraceRecord, 'id' | 'createdAt'>);
+
+          // E1: 通知前端工具调用失败
+          options?.onToolResult?.(tc.name, callId, false, `${error.code}: ${error.message}`);
 
           // 将错误结果以 tool 消息形式返回给 LLM
           const errorMsg: AgentMessage = {

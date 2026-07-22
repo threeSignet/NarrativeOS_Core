@@ -10,10 +10,12 @@
 // 故前端改用 EventSource，后端提供 GET 端点（input 经 query string）。
 //
 // SSE 事件协议：
-//   data: {"type":"session",...}  会话建立
-//   data: {"type":"token",...}    LLM 文本 token
-//   data: {"type":"done",...}     整回合结束
-//   data: {"type":"error",...}    错误
+//   data: {"type":"session",...}      会话建立
+//   data: {"type":"token",...}        LLM 文本 token
+//   data: {"type":"tool_call",...}    工具调用开始（E1）
+//   data: {"type":"tool_result",...}  工具调用结束（E1）
+//   data: {"type":"done",...}         整回合结束
+//   data: {"type":"error",...}        错误
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { AgentSessionManager } from '../agent-session-manager.js';
@@ -24,7 +26,12 @@ interface AgentLike {
   getState(): { sessionId: string };
   processUserInput(
     input: string,
-    options?: { onToken?: (token: string) => void; chapter?: number },
+    options?: {
+      onToken?: (token: string) => void;
+      onToolCall?: (toolName: string, args: Record<string, unknown>, callId: string) => void;
+      onToolResult?: (toolName: string, callId: string, success: boolean, summary: string) => void;
+      chapter?: number;
+    },
   ): Promise<AgentTurnResult>;
 }
 
@@ -105,6 +112,10 @@ async function handleChat(p: ChatParams): Promise<void> {
     const turn = await agent.processUserInput(input, {
       chapter,
       onToken: (token: string) => send({ type: 'token', text: token }),
+      onToolCall: (toolName: string, args: Record<string, unknown>, callId: string) =>
+        send({ type: 'tool_call', toolName, callId, args }),
+      onToolResult: (toolName: string, callId: string, success: boolean, summary: string) =>
+        send({ type: 'tool_result', toolName, callId, success, summary }),
     });
     if (!closed) send({ type: 'done', turn });
   } catch (err: unknown) {

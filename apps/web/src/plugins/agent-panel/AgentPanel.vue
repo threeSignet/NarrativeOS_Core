@@ -1,18 +1,42 @@
 <script setup lang="ts">
 // Agent 聊天面板（右侧 dock）——VS Code 式右侧面板
-// 里程碑①：最小可用聊天 UI。消息列表（用户/助手）+ 输入框 + 流式渲染 + 停止按钮。
-// 里程碑③起：status=needs_user_confirmation 时在此弹出 Proposal Review 入口。
+// E1：工具调用过程对用户可见（检测实体/建议关系/生成决策）
 import { ref, nextTick, watch } from 'vue';
-import { useAgentStore } from '../../stores/agent';
+import { useAgentStore, type ToolCallRecord } from '../../stores/agent';
 import { useUiStore } from '../../stores/ui';
 import { renderMd } from '../../utils/miniMd';
-import { UiSideHead, UiButton, UiIcon, UiEmpty, UiTextArea } from '../../components';
+import { UiSideHead, UiButton, UiIcon, UiEmpty, UiTextArea, UiStatusDot } from '../../components';
 
 const agent = useAgentStore();
 const ui = useUiStore();
 
 const input = ref('');
 const bodyRef = ref<HTMLElement | null>(null);
+
+/** 工具名中文映射 */
+const TOOL_LABELS: Record<string, string> = {
+  propose_event: '推演事件',
+  register_entity: '注册实体',
+  detect_relation_hints: '检测关系',
+  get_graph_view: '查看图谱',
+  get_entity_profile: '查看实体',
+  query_world_state: '查询世界状态',
+  commit_event: '提交事件',
+  get_foreshadowing_plans: '查看伏笔',
+  get_prose_document: '查看正文',
+  get_style_guide: '查看风格',
+  get_retcon_report: '查看追溯',
+  export_project: '导出项目',
+};
+
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] ?? name;
+}
+
+function toolStatusColor(tc: ToolCallRecord): string {
+  if (tc.success === null) return 'var(--st-candidate)'; // 进行中
+  return tc.success ? 'var(--success)' : 'var(--danger)';
+}
 
 /** 自动滚到底（新消息 / 流式 token 增长时） */
 async function scrollToBottom() {
@@ -30,12 +54,11 @@ watch(
 async function onSend() {
   const text = input.value.trim();
   if (!text || agent.streaming) return;
-  if (!ui.projectId) return; // 无激活项目，不发
+  if (!ui.projectId) return;
   input.value = '';
   await agent.send(ui.projectId, text);
 }
 
-/** Enter 发送，Shift+Enter 换行（中文输入法 composing 中不触发） */
 function onKeydown(e: KeyboardEvent) {
   if (e.isComposing) return;
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -44,18 +67,12 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-function onStop() {
-  agent.stop();
-}
-
-function onClear() {
-  agent.clear();
-}
+function onStop() { agent.stop(); }
+function onClear() { agent.clear(); }
 </script>
 
 <template>
   <div class="agent-panel">
-    <!-- 顶部标题栏（复用 UiSideHead） -->
     <UiSideHead title="AI 助手">
       <template #actions>
         <UiButton icon variant="ghost" size="sm" title="清空对话" :disabled="agent.streaming" @click="onClear">
@@ -64,7 +81,6 @@ function onClear() {
       </template>
     </UiSideHead>
 
-    <!-- 消息列表 -->
     <div ref="bodyRef" class="agent-body">
       <UiEmpty
         v-if="agent.messages.length === 0"
@@ -80,20 +96,33 @@ function onClear() {
         :class="`msg--${msg.role}`"
       >
         <div class="msg-role">{{ msg.role === 'user' ? '我' : 'AI' }}</div>
+
+        <!-- E1: 工具调用列表（assistant 消息内嵌） -->
+        <div v-if="msg.toolCalls && msg.toolCalls.length > 0" class="tool-calls">
+          <div
+            v-for="tc in msg.toolCalls" :key="tc.id"
+            class="tool-call-row"
+          >
+            <UiStatusDot :color="toolStatusColor(tc)" :size="8" />
+            <span class="tool-name">{{ toolLabel(tc.toolName) }}</span>
+            <span v-if="tc.success !== null" class="tool-status" :class="tc.success ? 'is-ok' : 'is-fail'">
+              {{ tc.success ? '完成' : '失败' }}
+            </span>
+            <span v-else class="tool-status is-running">执行中…</span>
+          </div>
+        </div>
+
         <div class="msg-content">
-          <!-- user 消息纯文本；assistant 消息渲染 Markdown（流式 token 实时渲染） -->
           <span v-if="msg.role === 'user'" class="msg-text">{{ msg.content }}</span>
           <span v-else class="msg-md" v-html="renderMd(msg.content)"></span>
           <span v-if="msg.streaming" class="msg-cursor">▋</span>
         </div>
-        <!-- 待确认提示（里程碑③接审核 UI；里程碑①仅提示） -->
         <div v-if="msg.status === 'needs_user_confirmation'" class="msg-pending">
           ⏳ Agent 产出了待确认的提案，审核功能即将上线
         </div>
       </div>
     </div>
 
-    <!-- 输入区 -->
     <div class="agent-input">
       <UiTextArea
         v-model="input"
@@ -164,7 +193,6 @@ function onClear() {
   border-bottom-left-radius: 4px;
 }
 .msg-text { display: inline; }
-/* Markdown 渲染样式（assistant 消息） */
 .msg-md { display: inline; }
 .msg-md :deep(h1) { font-size: var(--fs-md); font-weight: 600; margin: 0.5em 0 0.3em; }
 .msg-md :deep(h2) { font-size: var(--fs-sm); font-weight: 600; margin: 0.5em 0 0.3em; }
@@ -185,7 +213,34 @@ function onClear() {
 .msg-md :deep(hr) { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
 .msg-md :deep(p) { margin: 0; }
 
-/* 流式光标（闪烁） */
+/* E1: 工具调用列表 */
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  max-width: 100%;
+}
+.tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+}
+.tool-name {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+.tool-status { margin-left: auto; }
+.tool-status.is-ok { color: var(--success); }
+.tool-status.is-fail { color: var(--danger); }
+.tool-status.is-running { color: var(--st-candidate); animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* 流式光标 */
 .msg-cursor {
   display: inline-block;
   margin-left: 1px;
@@ -210,7 +265,6 @@ function onClear() {
   flex-direction: column;
   gap: var(--sp-2);
 }
-/* 输入框微调：比 UiTextArea 默认略大 padding + 行距，聊天场景更舒适 */
 .agent-textarea {
   padding: 8px 10px !important;
   line-height: 1.5;

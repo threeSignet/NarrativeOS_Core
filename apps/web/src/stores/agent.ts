@@ -2,7 +2,7 @@
 // Agent 会话 store——前端聊天状态管理
 // =============================================================================
 // 职责：
-// - 维护消息列表（用户消息 + Agent 回复，按时间序）
+// - 维护消息列表（用户消息 + Agent 回复 + 工具调用，按时间序）
 // - 流式接收 Agent token，累积到"正在生成"的 assistant 消息
 // - 持有 clientId（localStorage 持久化），跨请求续接同一 BFF 会话
 // - 暴露 send(input) 动作，封装 SSE 调用 + 状态流转
@@ -11,10 +11,22 @@ import { defineStore } from 'pinia';
 import { ref, reactive } from 'vue';
 import { chatWithAgent, type AgentTurnResult } from '../api/agent';
 
+/** 工具调用记录（E1） */
+export interface ToolCallRecord {
+  id: string;
+  type: 'tool_call';
+  toolName: string;
+  callId: string;
+  args: Record<string, unknown>;
+  /** null = 进行中，true = 成功，false = 失败 */
+  success: boolean | null;
+  summary?: string;
+}
+
 /** 单条聊天消息（UI 渲染用） */
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
   /** agent 消息的回合状态（决定是否显示"待确认"提示） */
   status?: AgentTurnResult['status'];
@@ -22,6 +34,8 @@ export interface ChatMessage {
   streaming?: boolean;
   /** 关联的 pendingProposalIds（status=needs_user_confirmation 时有值，里程碑③接入审核 UI） */
   pendingProposalIds?: string[];
+  /** E1: 工具调用记录 */
+  toolCalls?: ToolCallRecord[];
 }
 
 const CLIENT_ID_KEY = 'narrativeos_agent_client_id';
@@ -49,7 +63,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 用 reactive 包装：Vue 3 的 ref<数组> 对数组元素的属性修改不是深度响应式的，
     // 但 reactive 对象的属性修改是。流式 token 频繁改 content，必须 reactive。
     const assistantMsg = reactive<ChatMessage>({
-      id: `msg_${Date.now()}_a`, role: 'assistant', content: '', streaming: true,
+      id: `msg_${Date.now()}_a`, role: 'assistant', content: '', streaming: true, toolCalls: [],
     });
     messages.value.push(assistantMsg);
 
@@ -63,6 +77,29 @@ export const useAgentStore = defineStore('agent', () => {
           case 'token':
             assistantMsg.content += event.text as string;
             break;
+          case 'tool_call': {
+            // E1: 工具调用开始——在 assistant 消息中追加工具记录
+            const tc: ToolCallRecord = {
+              id: `tc_${event.callId}`,
+              type: 'tool_call',
+              toolName: event.toolName as string,
+              callId: event.callId as string,
+              args: (event.args as Record<string, unknown>) ?? {},
+              success: null,
+            };
+            assistantMsg.toolCalls = assistantMsg.toolCalls ?? [];
+            assistantMsg.toolCalls.push(tc);
+            break;
+          }
+          case 'tool_result': {
+            // E1: 工具调用结束——更新对应记录
+            const existing = assistantMsg.toolCalls?.find(t => t.callId === event.callId);
+            if (existing) {
+              existing.success = event.success as boolean;
+              existing.summary = event.summary as string;
+            }
+            break;
+          }
           case 'done':
             assistantMsg.streaming = false;
             const turn = event.turn as AgentTurnResult | undefined;
