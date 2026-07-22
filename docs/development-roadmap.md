@@ -65,7 +65,7 @@
 | 迭代 | 主题 | 完成标准 | 状态 |
 |---|---|---|---|
 | E1 | Agent 工具调用 SSE 事件 | Agent 工具调用过程对用户可见（检测实体/建议关系/生成决策） | ✅ 完成 |
-| E2 | Agent 写正文通道 | Agent 在正文里生成草稿块 → 审核 → 落正文 | 待开始 |
+| E2 | Agent 写正文通道 | Agent 在正文里生成草稿块 → 审核 → 落正文 | ✅ 完成 |
 | E3 | Agent 协作可见性强化 | 作者随时知道 AI 在做什么、需要确认什么 | 待开始 |
 
 ## 迭代记录
@@ -248,6 +248,20 @@
 **验证**：vue-tsc 0 错；后端 vitest 929/929 全绿；Playwright 8/8（AI按钮/面板渲染/输入框/发送按钮/消息列表/工具调用指示器/完成状态/无异常）
 
 **下一步**：E2（Agent 写正文通道）
+
+### 迭代 E2 · Agent 写正文通道 ✅（2026-07-22）
+
+**做了什么**：
+- 后端 ToolRouter：新增 `list_prose_documents`（只读）和 `write_prose_block`（追加块）两个工具定义 + case + handler；toolNames 26→28
+- 权限矩阵：`ProseService.listDocuments`/`getDocumentWithBlocks` → READ_QUERY，`ProseService.addBlock` → LOW_RISK_WRITE
+- BFF：`prose.ts` 新增 `POST /prose/:id/blocks` 端点（追加单个块）
+- 前端面板：AgentPanel 工具标签新增 `list_prose_documents`→"列出文档"、`write_prose_block`→"写入正文"
+- 测试：tool-router.test.ts + phase8-agent-tools.test.ts 工具计数 26→28
+- 验证脚本：`scripts/verify-prose-e2.mjs`（BFF 端点 + 块持久化 + 面板渲染）
+
+**验证**：vue-tsc 0 错；后端 vitest 929/929 全绿；Playwright 5/5（列出文档/追加块/块持久化/面板/无异常）
+
+**下一步**：E3（Agent 协作可见性强化）
 
 
 
