@@ -528,6 +528,26 @@ function buildToolDefinitions(): Record<string, Record<string, unknown>> {
         },
       },
     },
+    // ---- E2：正文写入 ----
+    list_prose_documents: {
+      name: 'list_prose_documents',
+      description: '列出项目全部正文文档（标题/版本/块数）。用于找到要写入的文档。',
+      parameters: { type: 'object', properties: {} },
+    },
+    write_prose_block: {
+      name: 'write_prose_block',
+      description: '向正文文档追加一个块（段落/对话/场景标题/分隔符）。写入后作者可在编辑器中审核。',
+      parameters: {
+        type: 'object',
+        properties: {
+          document_id: { type: 'string', description: '正文文档 ID' },
+          kind: { type: 'string', enum: ['paragraph', 'dialogue', 'scene_heading', 'chapter_title', 'separator', 'note'], description: '块类型' },
+          text: { type: 'string', description: '块文本内容' },
+          scene_id: { type: 'string', description: '关联场景 ID（可选）' },
+        },
+        required: ['document_id', 'kind', 'text'],
+      },
+    },
   };
 }
 
@@ -702,6 +722,8 @@ export class ToolRouter {
         case 'create_reveal_plan':         return await this.handleCreateRevealPlan(params);
         // Phase 12：正文/风格/Retcon/导出（只读 + 结构化）
         case 'get_prose_document':         return await this.handleGetProseDocument(params);
+        case 'list_prose_documents':       return await this.handleListProseDocuments(params);
+        case 'write_prose_block':          return await this.handleWriteProseBlock(params);
         case 'get_style_guide':            return await this.handleGetStyleGuide(params);
         case 'get_retcon_report':          return await this.handleGetRetconReport(params);
         case 'export_project':             return await this.handleExportProject(params);
@@ -754,7 +776,8 @@ export class ToolRouter {
       'detect_spatial_nodes', 'get_spatial_view',
       'create_chapter_plan', 'create_scene_plan', 'get_timeline_view',
       'create_foreshadowing_plan', 'get_foreshadowing_plans', 'create_reader_knowledge_state', 'create_reveal_plan',
-      'get_prose_document', 'get_style_guide', 'get_retcon_report', 'export_project',
+      'get_prose_document', 'list_prose_documents', 'write_prose_block',
+      'get_style_guide', 'get_retcon_report', 'export_project',
     ];
   }
 
@@ -1627,6 +1650,50 @@ export class ToolRouter {
       return this.ok({
         documentId: document.id, title: document.title, version: document.version,
         blockCount: blocks.length, markdown: lines.join('\n'),
+      });
+    } catch (err) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);
+    }
+  }
+
+  // E2：列出项目全部正文文档
+  private async handleListProseDocuments(_params: Record<string, unknown>) {
+    if (!this.proseService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '正文服务未配置', false);
+    }
+    const ctx = this.makeToolContext('prose');
+    try {
+      const docs = this.proseService.listDocuments(ctx);
+      return this.ok({
+        documents: (docs as any[]).map((d: any) => ({
+          id: d.id, title: d.title, version: d.versionId, mode: d.mode, draftId: d.draftId,
+        })),
+      });
+    } catch (err) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);
+    }
+  }
+
+  // E2：向正文文档追加块
+  private async handleWriteProseBlock(params: Record<string, unknown>) {
+    if (!this.proseService || !this.writingProjectId) {
+      return this.error(ToolErrorCode.INTERNAL_ERROR, '正文服务未配置', false);
+    }
+    const documentId = typeof params['document_id'] === 'string' ? params['document_id'] : '';
+    const kind = typeof params['kind'] === 'string' ? params['kind'] : '';
+    const text = typeof params['text'] === 'string' ? params['text'] : '';
+    const sceneId = typeof params['scene_id'] === 'string' ? params['scene_id'] : undefined;
+    if (!documentId) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'document_id 必填', false);
+    if (!kind) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'kind 必填', false);
+    if (!text) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, 'text 必填', false);
+    const validKinds = ['paragraph', 'dialogue', 'scene_heading', 'chapter_title', 'separator', 'note'];
+    if (!validKinds.includes(kind)) return this.error(ToolErrorCode.SCHEMA_VALIDATION_FAILED, `kind 无效: ${kind}，可选: ${validKinds.join(', ')}`, false);
+    const ctx = this.makeToolContext('prose');
+    try {
+      const block = this.proseService.addBlock(ctx, { documentId, kind: kind as any, text, sceneId });
+      return this.ok({
+        blockId: block.id, documentId, kind: block.kind, orderIndex: block.orderIndex,
+        message: `已追加${kind === 'paragraph' ? '段落' : kind === 'dialogue' ? '对话' : kind}到文档`,
       });
     } catch (err) {
       return this.error(ToolErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : String(err), false);

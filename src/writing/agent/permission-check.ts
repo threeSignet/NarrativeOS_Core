@@ -96,6 +96,9 @@ export const AGENT_PERMISSIONS: Readonly<Record<string, AgentCapability>> = {
   'AuditService.query': AgentCapability.READ_QUERY,
   // 新增（G2）：list 是 query 的扩展（带 result 过滤），同属只读审计查询
   'AuditService.list': AgentCapability.READ_QUERY,
+  // E2：正文只读查询
+  'ProseService.listDocuments': AgentCapability.READ_QUERY,
+  'ProseService.getDocumentWithBlocks': AgentCapability.READ_QUERY,
   'CoreBridgeService.readCurrentWorldSnapshot': AgentCapability.READ_QUERY,
   'CoreBridgeService.explainCoreFailure': AgentCapability.READ_QUERY,
   // 新增：findRegisteredEntities 是只读查询（按名称找已注册实体），供 /entity 命令用
@@ -117,6 +120,8 @@ export const AGENT_PERMISSIONS: Readonly<Record<string, AgentCapability>> = {
   'DraftService.abandonDraft': AgentCapability.LOW_RISK_WRITE,
   'EntityService.deprecateEntitySketch': AgentCapability.LOW_RISK_WRITE,
   'WorkflowService.createPendingDecision': AgentCapability.LOW_RISK_WRITE,
+  // E2：正文写入（追加块，不修改/删除已有内容）
+  'ProseService.addBlock': AgentCapability.LOW_RISK_WRITE,
   // rejectBlueprintChange 仅把 suggestion 标 dismissed，不改蓝图结构（entityTypes/relationTypes），
   // 危害性与 discardIdea 相当；与 acceptBlueprintChange（COMMIT_FORBIDDEN，落地结构变更）不对称。
   'BlueprintService.rejectBlueprintChange': AgentCapability.LOW_RISK_WRITE,

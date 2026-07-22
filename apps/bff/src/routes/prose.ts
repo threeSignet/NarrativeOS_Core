@@ -1,12 +1,12 @@
 // =============================================================================
-// /api/projects/:pid/prose 路由——正文文档（迭代 A2）
+// /api/projects/:pid/prose 路由——正文文档（迭代 A2 + E2）
 // =============================================================================
-// §13.8 块级正文模型。本迭代只暴露"文档级 + 文本读写"最小集，
-// 让前端章节编辑器能读写正文。块级 CRUD（addBlock/moveBlock 等）留给后续迭代。
+// §13.8 块级正文模型。
 //
 //   GET    /prose/:id              获取文档 + 全部块（聚合视图）
 //   POST   /prose                  创建文档 { title, draftId? }
 //   POST   /prose/:id/ingest       纯文本批量写入（按空行/标题切分为块）
+//   POST   /prose/:id/blocks       追加单个块（E2：Agent 写正文通道）
 //   GET    /prose                  列出项目所有文档（概览）
 
 import type { FastifyInstance } from 'fastify';
@@ -83,6 +83,20 @@ export function registerProseRoutes(app: FastifyInstance, deps: ProseRouteDeps) 
       }
       const result = svc.ingestText(ctx, id, body.text);
       return { success: true, addedCount: result.addedCount };
+    } catch (err) { return handleErr(err, reply); }
+  });
+
+  // E2：追加单个块到文档末尾
+  app.post('/api/projects/:pid/prose/:id/blocks', async (req, reply) => {
+    const { pid, id } = req.params as { pid: string; id: string };
+    const body = req.body as { kind: string; text: string; sceneId?: string };
+    if (!body?.kind || !body?.text) {
+      reply.code(400); return { error: 'kind 和 text 必填', code: WritingErrorCode.WRITING_STORE_ERROR };
+    }
+    try {
+      return getProseService().addBlock(makeCtx({ pid, trigger: 'author_action' }), {
+        documentId: id, kind: body.kind as any, text: body.text, sceneId: body.sceneId,
+      });
     } catch (err) { return handleErr(err, reply); }
   });
 }

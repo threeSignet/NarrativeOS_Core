@@ -24,6 +24,8 @@ const TOOL_LABELS: Record<string, string> = {
   commit_event: '提交事件',
   get_foreshadowing_plans: '查看伏笔',
   get_prose_document: '查看正文',
+  list_prose_documents: '列出文档',
+  write_prose_block: '写入正文',
   get_style_guide: '查看风格',
   get_retcon_report: '查看追溯',
   export_project: '导出项目',
