@@ -64,7 +64,7 @@
 
 | 迭代 | 主题 | 完成标准 | 状态 |
 |---|---|---|---|
-| E1 | Agent 工具调用 SSE 事件 | Agent 工具调用过程对用户可见（检测实体/建议关系/生成决策） | 待开始 |
+| E1 | Agent 工具调用 SSE 事件 | Agent 工具调用过程对用户可见（检测实体/建议关系/生成决策） | ✅ 完成 |
 | E2 | Agent 写正文通道 | Agent 在正文里生成草稿块 → 审核 → 落正文 | 待开始 |
 | E3 | Agent 协作可见性强化 | 作者随时知道 AI 在做什么、需要确认什么 | 待开始 |
 
@@ -234,6 +234,20 @@
 **★ 阶段 D 完结**：场景(D1) + 修订(D2) + 风格(D3) + 追溯(D4) 四大高级写作能力全部接前端。前端覆盖 service 数：23/23 全覆盖。
 
 **下一步**：E1（Agent SSE 可见性）或 B2（蓝图只读，可跳过因全部 service 已覆盖）
+
+### 迭代 E1 · Agent 工具调用 SSE 事件 ✅（2026-07-22）
+
+**做了什么**：
+- 后端：`narrative-agent.ts` processUserInput 新增 `onToolCall`/`onToolResult` 回调，runReActLoop 同步扩展 options 类型；工具执行前后分别调用回调
+- BFF：`agent.ts` SSE 协议新增 `tool_call`/`tool_result` 事件类型，handleChat 传入回调
+- 前端 API：`agent.ts` 新增 `ToolCallEvent`/`ToolResultEvent` 类型
+- 前端 store：`agent.ts` ChatMessage 新增 `toolCalls: ToolCallRecord[]`，处理 `tool_call`（创建记录）和 `tool_result`（更新状态）
+- 前端面板：`AgentPanel.vue` assistant 消息内嵌工具调用指示器（状态点+中文工具名+完成/失败/执行中状态），13 个常用工具中文映射
+- 验证脚本：`scripts/verify-agent-e1.mjs`（Playwright 8 项验证，含真实 Agent 调用）
+
+**验证**：vue-tsc 0 错；后端 vitest 929/929 全绿；Playwright 8/8（AI按钮/面板渲染/输入框/发送按钮/消息列表/工具调用指示器/完成状态/无异常）
+
+**下一步**：E2（Agent 写正文通道）
 
 
 
