@@ -56,7 +56,7 @@
 | 迭代 | 主题 | 涉及 service | 完成标准 | 状态 |
 |---|---|---|---|---|
 | D1 | SceneService 接前端：场景卡 | scene | 场景列表 + 目标/冲突/结果 + 关联章节 | ✅ 完成 |
-| D2 | RevisionService 接前端：修订记录 | revision | 修订历史查看 + 版本组 + 恢复 | 待开始 |
+| D2 | RevisionService 接前端：修订记录 | revision | 修订历史查看 + 版本组 + 恢复 | ✅ 完成 |
 | D3 | StyleService 接前端：风格指南 | style | 风格指南/示例/禁用表达只读 | 待开始 |
 | D4 | RetconViewService 接前端：追溯修改 | retcon | 影响报告只读视图 | 待开始 |
 
@@ -195,6 +195,19 @@
 **验证**：vue-tsc 0 错；Playwright 9/9（创建归入章节分组/选中详情/8功能芯片/POV下拉/状态推进/无异常）
 
 **下一步**：D2（RevisionService 修订记录）或 B2（蓝图只读）
+
+### 迭代 D2 · RevisionService 接前端（修订历史查看器）✅（2026-07-22）
+
+**做了什么**：
+- 后端：RevisionService 补 `listAllRevisions` 方法 + writing-store 补 `listAllRevisionsByProject`（按项目列出全部修订，按时间倒序）
+- BFF：`apps/bff/src/routes/revisions.ts`（2 端点：GET 列表 + GET 单条），server.ts 注册
+- 前端：`api/revisions.ts`（RevisionRecord 类型 + TargetType 9种/Action 5种中文标签/颜色）+ `stores/revision.ts`（load + targetTypeFilter computed）
+- 插件：`revision-history`（时钟回溯图标 + RevisionSideView 侧栏[类型过滤芯片] + RevisionListView 主区[垂直时间线列表]）+ manifest（order=10）
+- 验证脚本：`scripts/verify-revision-d2.mjs`（Playwright 6 项验证）
+
+**验证**：vue-tsc 0 错；后端 vitest 929/929 全绿；Playwright 6/6（侧栏渲染/过滤芯片/空状态/BFF 端点/类型切换/无异常）
+
+**下一步**：D3（StyleService 风格指南）或 B2（蓝图只读）
 
 
 
